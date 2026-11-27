@@ -530,14 +530,20 @@ fn next(screens_only: bool) -> Arc<Pending> {
 /// 64), else two thirds of the logical processors, 2 to 16. They run below the
 /// title's own threads, and a cold cache queues hundreds at once.
 fn worker_count(asked: Option<usize>, processors: usize) -> usize {
-    worker_count_for(asked, processors, false)
+    worker_count_for(asked, processors, crate::low_vram::Ram::Roomy)
 }
 
-fn worker_count_for(asked: Option<usize>, processors: usize, limited_ram: bool) -> usize {
-    match asked {
-        Some(n) => n.clamp(1, 64),
-        None if limited_ram => (processors * 3 / 4).clamp(2, 8),
-        None => (processors * 2 / 3).clamp(2, 16),
+/// [`worker_count`] by how much memory the PC has: two thirds of the
+/// processors as before; three quarters, at most eight, on 32 GiB or less;
+/// half, at most six, on 16 GB, where the title's own workers and the
+/// paging both want the processors too.
+fn worker_count_for(asked: Option<usize>, processors: usize, ram: crate::low_vram::Ram) -> usize {
+    use crate::low_vram::Ram;
+    match (asked, ram) {
+        (Some(n), _) => n.clamp(1, 64),
+        (None, Ram::Tight) => (processors / 2).clamp(2, 6),
+        (None, Ram::Limited) => (processors * 3 / 4).clamp(2, 8),
+        (None, Ram::Roomy) => (processors * 2 / 3).clamp(2, 16),
     }
 }
 
@@ -551,7 +557,7 @@ fn workers() -> bool {
                 .ok()
                 .and_then(|v| v.trim().parse().ok()),
             std::thread::available_parallelism().map_or(2, |n| n.get()),
-            crate::residency::limited_host_ram(),
+            crate::low_vram::ram(),
         );
         tracing::info!(workers, "pipeline workers");
         let screens = if screens_first() { SCREEN_WORKERS } else { 0 };
@@ -619,15 +625,30 @@ mod tests {
 
     #[test]
     fn worker_count_follows_the_processors_and_the_switch() {
+        use crate::low_vram::Ram;
         assert_eq!(worker_count(None, 1), 2);
         assert_eq!(worker_count(None, 24), 16);
         assert_eq!(worker_count(None, 64), 16);
         assert_eq!(worker_count(Some(0), 24), 1);
         assert_eq!(worker_count(Some(20), 24), 20);
-        assert_eq!(worker_count_for(None, 8, true), 6);
-        assert_eq!(worker_count_for(None, 16, true), 8);
-        assert_eq!(worker_count_for(None, 24, true), 8);
-        assert_eq!(worker_count_for(Some(12), 8, true), 12);
+        // 32 GiB or less: three quarters of the processors, at most eight.
+        assert_eq!(worker_count_for(None, 8, Ram::Limited), 6);
+        assert_eq!(worker_count_for(None, 16, Ram::Limited), 8);
+        assert_eq!(worker_count_for(None, 24, Ram::Limited), 8);
+        assert_eq!(worker_count_for(Some(12), 8, Ram::Limited), 12);
+        // 16 GB: half, at most six (an eight-thread laptop gets four).
+        assert_eq!(worker_count_for(None, 8, Ram::Tight), 4);
+        assert_eq!(worker_count_for(None, 12, Ram::Tight), 6);
+        assert_eq!(worker_count_for(None, 24, Ram::Tight), 6);
+        assert_eq!(worker_count_for(None, 2, Ram::Tight), 2);
+        assert_eq!(worker_count_for(None, 1, Ram::Tight), 2);
+        assert_eq!(worker_count_for(Some(20), 8, Ram::Tight), 20);
+        assert_eq!(worker_count_for(Some(0), 8, Ram::Tight), 1);
+        // Never more on a smaller PC than on a larger one.
+        for cpus in [1usize, 2, 4, 8, 16, 32, 64] {
+            assert!(worker_count_for(None, cpus, Ram::Tight) <= worker_count_for(None, cpus, Ram::Limited));
+            assert!(worker_count_for(None, cpus, Ram::Limited) <= worker_count_for(None, cpus, Ram::Roomy));
+        }
     }
 
     /// A first use queues the pipeline and, within the budget, gets the

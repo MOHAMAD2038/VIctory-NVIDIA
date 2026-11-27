@@ -33,8 +33,11 @@ const SPARE: usize = 2;
 /// The same while the card has room ([`room`]): 4 GiB of them.
 const SPARE_KEPT: usize = 64;
 /// The same of blocks of staging buffers, which are the PC's memory: run
-/// crash-1 held 5.2 GB of them.
+/// crash-1 held 5.2 GB of them. Four (256 MiB) on a 16 GB PC
+/// ([`staging_kept`]).
 const STAGING_KEPT: usize = 8;
+/// The empty blocks of textures kept on a small card while it has room.
+const SMALL_KEPT: usize = 16;
 /// How many are kept now.
 static SPARES: AtomicUsize = AtomicUsize::new(SPARE);
 
@@ -42,7 +45,7 @@ static SPARES: AtomicUsize = AtomicUsize::new(SPARE);
 /// [`SPARE_KEPT`] below 85 % ([`crate::host::keep_freed`]), else [`SPARE`].
 /// Asked once a second.
 pub(crate) fn room(memory: Option<[u64; 4]>) {
-    let pressure = crate::residency::pressured();
+    let (pressure, ram) = (crate::residency::pressured(), crate::low_vram::ram());
     let limit = spares(memory, crate::host::keep_freed() && !pressure);
     SPARES.store(limit, Ordering::Relaxed);
     let tick = now();
@@ -52,6 +55,10 @@ pub(crate) fn room(memory: Option<[u64; 4]>) {
         pool.reclaim(tick, limit, true);
     }
     if let Ok(mut pool) = STAGING.try_lock() {
+        // The cap itself has to come down, not only the room given at this
+        // tick: `rested` re-reads SPARES, which is about the card, and would
+        // put the blocks back on the next give.
+        pool.most = staging_kept(ram);
         let staging_limit = if crate::residency::critical_commit() {
             0
         } else if pressure {
@@ -63,11 +70,30 @@ pub(crate) fn room(memory: Option<[u64; 4]>) {
     }
 }
 
+/// The empty blocks of staging buffers kept: [`STAGING_KEPT`] (512 MiB) as
+/// before, half on a 16 GB PC, where 512 MiB of the PC's memory held for
+/// upload buffers that are not being used is a quarter of what the title's
+/// streaming has to spare.
+fn staging_kept(ram: crate::low_vram::Ram) -> usize {
+    if ram == crate::low_vram::Ram::Tight { STAGING_KEPT / 2 } else { STAGING_KEPT }
+}
+
 fn spares(memory: Option<[u64; 4]>, keep: bool) -> usize {
     match memory {
-        Some([budget, used, ..]) if keep && u128::from(used) * 100 < u128::from(budget) * 85 => SPARE_KEPT,
+        Some([budget, used, ..]) if keep && u128::from(used) * 100 < u128::from(budget) * 85 => {
+            kept(budget)
+        }
         _ => SPARE,
     }
+}
+
+/// The empty blocks of textures kept while the card has room: [`SPARE_KEPT`]
+/// (4 GiB) as before, 1 GiB on a card of 9 GiB or less — there 4 GiB is more
+/// than half the card, and whatever is kept past its budget Windows moves
+/// into the PC's memory, which is the paging a 16 GB PC cannot afford
+/// ([`crate::low_vram::card_headroom`]).
+fn kept(budget: u64) -> usize {
+    if crate::low_vram::card_headroom(budget) > 0 { SMALL_KEPT } else { SPARE_KEPT }
 }
 
 /// Milliseconds until a piece given back is used again. (It was three
@@ -744,10 +770,25 @@ mod tests {
 
     #[test]
     fn empty_blocks_stay_while_the_card_has_room() {
-        assert_eq!(spares(Some([100, 84, 0, 0]), true), SPARE_KEPT);
-        assert_eq!(spares(Some([100, 85, 0, 0]), true), SPARE);
-        assert_eq!(spares(Some([100, 10, 0, 0]), false), SPARE);
+        // A 12 GB card's budget: 4 GiB of empty blocks under 85 % in use.
+        let big = 11_229 << 20;
+        assert_eq!(spares(Some([big, big / 100 * 84, 0, 0]), true), SPARE_KEPT);
+        assert_eq!(spares(Some([big, big / 100 * 86, 0, 0]), true), SPARE);
+        assert_eq!(spares(Some([big, big / 100 * 10, 0, 0]), false), SPARE);
         assert_eq!(spares(None, true), SPARE);
+        // An 8 GB card's budget (7.6 to 8.0 GiB) and a 6 GB one's: 1 GiB,
+        // the quarter [`crate::low_vram::card_headroom`] keeps free of it.
+        for small in [7_692 << 20, 8 << 30, 6 << 30] {
+            assert_eq!(spares(Some([small, small / 100 * 10, 0, 0]), true), SMALL_KEPT);
+            assert_eq!(spares(Some([small, small / 100 * 90, 0, 0]), true), SPARE);
+        }
+        assert_eq!(kept(11_229 << 20), SPARE_KEPT);
+        assert_eq!(kept(7_692 << 20), SMALL_KEPT);
+        // Four blocks of 64 MiB is 256 MiB: half of the 512 MiB of
+        // `STAGING_KEPT`; sixteen is 1 GiB.
+        assert_eq!((SMALL_KEPT as u64, STAGING_KEPT as u64), (1 << 30) / BLOCK, (512 << 20) / BLOCK);
+        assert_eq!(staging_kept(crate::low_vram::Ram::Tight), STAGING_KEPT / 2);
+        assert_eq!(staging_kept(crate::low_vram::Ram::Limited), STAGING_KEPT);
     }
 
     #[test]

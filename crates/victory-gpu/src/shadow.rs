@@ -1338,31 +1338,37 @@ fn pooled(n: usize) -> Vec<u8> {
 }
 
 /// How many snapshot buffers are kept (`VICTORY_SNAPSHOT_POOL`; `8`: as
-/// before).
+/// before), and how many bytes in all ([`give_back`]).
 ///
 /// A frame gives some 330 ranges of copies in the PC's memory to shaders, and
 /// most are of copies of their own; with two or three frames in the air eight
 /// buffers were the eight largest, and every other snapshot was memory fresh
 /// from the kernel and given back to it: 11 % of the submitting thread in the
 /// opening (profile cpu-1: `NtAllocateVirtualMemory` under
-/// [`Shadow::writing`]), and the page faults of filling it.
-fn snapshots_kept() -> usize {
-    static MOST: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *MOST.get_or_init(|| std::env::var("VICTORY_SNAPSHOT_POOL").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(1024))
+/// [`Shadow::writing`]), and the page faults of filling it. On a 16 GB PC
+/// both are half (`crate::low_vram::snapshots_kept`): the memory held between
+/// frames there is what the title's streaming would page out.
+fn snapshots_kept() -> (usize, usize) {
+    static MOST: std::sync::OnceLock<(usize, usize)> = std::sync::OnceLock::new();
+    *MOST.get_or_init(|| {
+        let asked = std::env::var("VICTORY_SNAPSHOT_POOL").ok().and_then(|v| v.trim().parse::<usize>().ok());
+        let (count, bytes) = crate::low_vram::snapshots_kept(crate::low_vram::ram());
+        (asked.unwrap_or(count), bytes)
+    })
 }
 
 /// Returns a snapshot buffer to the pool: at most [`snapshots_kept`] kept,
-/// the largest, and of those the largest one and the next ones up to `KEPT`
+/// the largest, and of those the largest one and the next ones up to its
 /// bytes in all.
 fn give_back(v: Vec<u8>) {
-    const KEPT: usize = 512 << 20;
+    let (count, kept_bytes) = snapshots_kept();
     let mut pool = POOL.lock().unwrap_or_else(|e| e.into_inner());
     pool.push(v);
     pool.sort_by_key(|v| std::cmp::Reverse(v.capacity()));
     let (mut kept, mut total) = (0, 0usize);
-    for v in pool.iter().take(snapshots_kept()) {
+    for v in pool.iter().take(count) {
         total = total.saturating_add(v.capacity());
-        if kept > 0 && total > KEPT {
+        if kept > 0 && total > kept_bytes {
             break;
         }
         kept += 1;

@@ -1,4 +1,4 @@
-﻿//! Host-memory admission for speculative texture work and reusable upload storage.
+//! Host-memory admission for speculative texture work and reusable upload storage.
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
@@ -104,15 +104,32 @@ pub(crate) fn limited_host_ram() -> bool {
 }
 
 fn next_pressure(was: bool, physical: u64, commit: u64) -> bool {
-    // The lines as measured on 32 GB (3 GiB of free physical memory, 4 GiB of
-    // commit; recovering needs both above the higher lines). They are absolute:
-    // on a 16 GB PC three gigabytes free is a larger share of the machine, so
-    // pressure engages there earlier in proportion, which is the safe way
-    // round — what it sheds is what would otherwise be paged out.
+    next_pressure_at(was, physical, commit, pressure_lines(crate::low_vram::ram()))
+}
+
+/// Where pressure starts and ends: the free physical memory and the commit left
+/// to the machine when it is entered, and the two it recovers above.
+fn pressure_lines(ram: Ram) -> (u64, u64, u64, u64) {
+    match ram {
+        // A 16 GB PC keeps two or three gigabytes of physical memory free for
+        // the whole of a session: the title fills the rest and Windows trims
+        // working sets by itself. The 32 GB machines' 3 GiB line therefore sat
+        // under the free memory of a whole run there (2026-11-27 21:31, frame
+        // 1842: 2,719 MiB free against 10,277 MiB of commit, nothing paging),
+        // so the layer was in pressure from the first minute on and its
+        // prefetch and staging stayed at the slowest — which is one of the
+        // ways a world that is streaming in waits for room.
+        Ram::Tight => (2 * GIB, 3584 * MIB, 3 * GIB, 5 * GIB),
+        Ram::Roomy | Ram::Limited => (3 * GIB, 5 * GIB, 4 * GIB, 6 * GIB),
+    }
+}
+
+fn next_pressure_at(was: bool, physical: u64, commit: u64, lines: (u64, u64, u64, u64)) -> bool {
+    let (enter_physical, keep_physical, enter_commit, keep_commit) = lines;
     if was {
-        physical < 5 * GIB || commit < 6 * GIB
+        physical < keep_physical || commit < keep_commit
     } else {
-        physical <= 3 * GIB || commit <= 4 * GIB
+        physical <= enter_physical || commit <= enter_commit
     }
 }
 
@@ -214,12 +231,25 @@ mod tests {
 
     #[test]
     fn either_constraint_enters_pressure_and_both_must_recover() {
-        assert!(next_pressure(false, 12 * GIB, 4 * GIB));
-        assert!(next_pressure(false, 3 * GIB, 16 * GIB));
-        assert!(next_pressure(true, 4 * GIB, 7 * GIB));
-        assert!(next_pressure(true, 6 * GIB, 5 * GIB));
-        assert!(!next_pressure(true, 5 * GIB, 6 * GIB));
-        assert!(!next_pressure(false, 4 * GIB, 5 * GIB));
+        let big = pressure_lines(Ram::Limited);
+        assert!(next_pressure_at(false, 12 * GIB, 4 * GIB, big));
+        assert!(next_pressure_at(false, 3 * GIB, 16 * GIB, big));
+        assert!(next_pressure_at(true, 4 * GIB, 7 * GIB, big));
+        assert!(next_pressure_at(true, 6 * GIB, 5 * GIB, big));
+        assert!(!next_pressure_at(true, 5 * GIB, 6 * GIB, big));
+        assert!(!next_pressure_at(false, 4 * GIB, 5 * GIB, big));
+    }
+
+    #[test]
+    fn a_16_gb_pc_is_not_pressured_at_the_memory_it_lives_in() {
+        let tight = pressure_lines(Ram::Tight);
+        // The run of 2026-11-27 21:31, frame 1842, to the megabyte.
+        assert!(!next_pressure_at(false, 2719 * MIB, 10277 * MIB, tight));
+        assert!(next_pressure_at(false, 2048 * MIB, 10277 * MIB, tight));
+        assert!(next_pressure_at(false, 8 * GIB, 3 * GIB, tight));
+        // It does stay in pressure while physical memory recovers to 3.5 GiB.
+        assert!(next_pressure_at(true, 3400 * MIB, 8 * GIB, tight));
+        assert!(!next_pressure_at(true, 3584 * MIB, 8 * GIB, tight));
     }
 
     #[test]

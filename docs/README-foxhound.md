@@ -126,15 +126,26 @@ between a frame that runs and one that waits for the disk. Two things changed fo
   of six, half the processors (at most eight) translating lists, half the pipeline workers, and nothing
   speculative staged once free physical memory is under 768 MiB. A card whose budget is 9 GiB or less keeps
   1 GiB of it free for the host's own allocations, where its 90 % line left about 780 MiB on an 8 GB card.
+  It also starts shedding memory later than on a big machine: pressure begins at 2 GiB of free physical memory
+  (recovering above 3.5) instead of 3 (above 5), because a 16 GB PC lives at two or three gigabytes free for the
+  whole of a session — the first measured run sat at 2,719 MiB free against 10,277 MiB of commit, nothing
+  paging, and the big machines' line held the layer in pressure, and its prefetch and staging at their
+  slowest, from the first minute on.
   `VICTORY_LOW_VRAM=1` / `=0` chooses the tier outright; the numbers are in `crates/victory-gpu/src/low_vram.rs`.
 - **`-Low` sets the picture for it**: the scene at 1920x1080 upscaled to 2560x1440 (DLSS performance renders
   1280x720; without NVIDIA's files the title upscales), 30 frames a second (the interval the title asks for
   itself), and Frame Generation off and not made ready — it needs RTX 40 or later and 1.5 to 2 GB of the card.
 
 A frame still costs the layer its CPU work (about 33 ms in the opening rooms on the measured PC), so 30 a second
-is the target on a small PC too; what the profile buys is the card's room and the memory. None of it has been
-measured on a 16 GB laptop yet. `victory play` prints which profile it took, and the F3 panel shows what the run
-does (frame rate, VRAM, RAM).
+is the target on a small PC too; what the profile buys is the card's room and the memory. `victory play` prints
+which profile it took, and the F3 panel shows what the run does (frame rate, VRAM, RAM).
+
+The first run on such a PC (RTX 4050 Laptop, 6 GB of a 5.0 GiB budget, 16 GB, 2026-11-27) held 30 fps from the
+first frame to about a minute in, in the opening. Then, at the first cut where the world streams in, a second
+wave of shader translation (960 host pipelines in the run, 1,831 translations) met a card already at its line
+(4,128 MB of 5,152) and about 7,000 texture uploads due at once: 2 to 3 fps from there to the end of the run,
+with the card under 30 % busy. That is the cold caches and the card's room, not the size of the picture. Warm
+the pipelines first (*Warming up* below), which is what that wave was; a smaller picture would not have helped.
 
 If it does not hold 30, the panel says where the time goes: with the GPU at work most of the frame, the card is
 the limit — `-SeriesS` (1280x720 inside, upscaled) is four times less to draw, and `-Dlss performance` already
@@ -151,10 +162,12 @@ makes (`VICTORY_PIPELINE_BOOK=1`, set by the launcher); afterwards make them all
 
 ```powershell
 $env:VICTORY_HOST_WAVE = '32'
-target\release\victory.exe warm
+target\release\victory.exe warm --used
 ```
 
-The NVIDIA driver keeps its compiled pipelines **per program path**: a build run from another folder starts cold.
+`warm` alone makes every pipeline the book knows; `--used` only the ones earlier runs drew with first (a few
+minutes, and it says how many there are before it starts). The NVIDIA driver keeps its compiled pipelines
+**per program path**: a build run from another folder starts cold.
 
 ## Switches worth knowing
 

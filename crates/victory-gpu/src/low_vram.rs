@@ -174,12 +174,20 @@ pub(crate) fn scratch_spare(ram: Ram) -> u64 {
 }
 
 /// The threads that translate lists (`VICTORY_THIN_THREADS`): eight, as
-/// measured, while the machine has processors to spare; on 16 GB half of
-/// them, at most eight, because the title's own workers want the same
-/// processors (eight logical ones on the laptops this is for).
+/// measured, while the machine has processors to spare; on 16 GB four less
+/// than the PC has, at most twelve, because the title's own workers want the
+/// same processors.
+///
+/// Measured on the 16 GB laptop of 2026-11-27 (16 logical processors): eight
+/// against twelve threads left the work the same — 570 against 573 ms of
+/// processor time a frame, the city 7.1 against 7.4 fps — but twelve held
+/// 30 fps from frame 1,500 to 2,000, and the frames after that averaged 24.6
+/// fps where eight were already at 4. Half the processors (eight there) was
+/// the guess; four less does better. Four of the sixteen are left for the
+/// title's five or six recording threads.
 pub(crate) fn thin_threads(ram: Ram, processors: usize) -> usize {
     match ram {
-        Ram::Tight => (processors / 2).clamp(2, 8),
+        Ram::Tight => processors.saturating_sub(4).clamp(2, 12),
         _ => 8,
     }
 }
@@ -252,10 +260,11 @@ mod tests {
     fn the_threads_follow_the_processors_on_sixteen_gigabytes() {
         assert_eq!(thin_threads(Ram::Limited, 32), 8);
         assert_eq!(thin_threads(Ram::Tight, 4), 2);
-        assert_eq!(thin_threads(Ram::Tight, 6), 3);
+        assert_eq!(thin_threads(Ram::Tight, 6), 2);
         assert_eq!(thin_threads(Ram::Tight, 8), 4);
-        assert_eq!(thin_threads(Ram::Tight, 16), 8);
-        assert_eq!(thin_threads(Ram::Tight, 64), 8);
+        assert_eq!(thin_threads(Ram::Tight, 12), 8);
+        assert_eq!(thin_threads(Ram::Tight, 16), 12);
+        assert_eq!(thin_threads(Ram::Tight, 64), 12);
         assert!(thin_threads(Ram::Tight, 1) >= 1, "never no thread at all");
         assert_eq!(under_threads(Ram::Limited), 6);
         assert_eq!(under_threads(Ram::Tight), 4);

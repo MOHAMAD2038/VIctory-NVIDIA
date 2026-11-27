@@ -172,6 +172,76 @@ static BACKS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 static CHUNKS: AtomicU64 = AtomicU64::new(0);
 static STATS: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
 
+/// `VICTORY_THIN_KINDS=1`: what the translated calls of a frame are, by the
+/// method each one names, and how many of them say the same as the call right
+/// before them (a repeat is what a stream could leave out without the card
+/// doing anything different; the first call of each handed-over piece has none
+/// before it, so a few are missed). Off, nothing is counted.
+///
+/// It answers where a frame's translation time goes when a PC translates a
+/// lot: 2026-11-27, a 16 GB laptop with 8 fast cores, 34,600 to 38,700 calls a
+/// frame in the city, 826 to 847 ms of processor time a frame, against 36,000
+/// calls in 230 ms on the 24-thread PC the other numbers were measured on, and
+/// the frame was 310 ms while the card was 24 % busy.
+fn kinds_on() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_THIN_KINDS").is_some_and(|v| v == "1"))
+}
+
+/// [`kinds_on`]'s counts, by op.
+static KINDS_SEEN: [AtomicU64; 64] = [const { AtomicU64::new(0) }; 64];
+/// [`kinds_on`]'s calls that repeat the one before them.
+static REPEATS: AtomicU64 = AtomicU64::new(0);
+
+/// The method an op names, for [`kinds_on`]'s line (none: nothing named, and
+/// the number is printed instead).
+fn name_of(op: u64) -> Option<&'static str> {
+    const NAMES: &[(u64, &str)] = &[
+        (Plain::GRAPHICS_TABLE as u64, "graphics_table"),
+        (Plain::COMPUTE_TABLE as u64, "compute_table"),
+        (Plain::GRAPHICS_VIEW as u64, "graphics_view"),
+        (Plain::COMPUTE_VIEW as u64, "compute_view"),
+        (Plain::GRAPHICS_CONSTANT as u64, "graphics_constant"),
+        (Plain::COMPUTE_CONSTANT as u64, "compute_constant"),
+        (Plain::SET_PIPELINE as u64, "set_pipeline"),
+        (Plain::DRAW as u64, "draw"),
+        (Plain::DRAW_INDEXED as u64, "draw_indexed"),
+        (Plain::DISPATCH as u64, "dispatch"),
+        (Plain::DISPATCH_X as u64, "dispatch_x"),
+        (Plain::DISPATCH_MESH as u64, "dispatch_mesh"),
+        (Plain::DISPATCH_MESH_X as u64, "dispatch_mesh_x"),
+        (Plain::EXECUTE_INDIRECT as u64, "execute_indirect"),
+        (Plain::COPY_BUFFER as u64, "copy_buffer_region"),
+        (Plain::COPY_RESOURCE as u64, "copy_resource"),
+        (Plain::COPY_MEMORY as u64, "copy_memory"),
+        (Plain::RESOLVE as u64, "resolve"),
+        (Plain::TOPOLOGY as u64, "topology"),
+        (Plain::STENCIL_REF as u64, "stencil_ref"),
+        (Plain::DEPTH_BOUNDS as u64, "depth_bounds"),
+        (Plain::INDEX_BUFFER as u64, "index_buffer"),
+        (Plain::VERTEX_BUFFERS as u64, "vertex_buffers"),
+        (Plain::WAIT_VALUE as u64, "wait_value"),
+        (Plain::SYNC as u64, "sync"),
+        (RESET, "reset"),
+        (CLOSE, "close"),
+        (UPLOAD, "upload memory"),
+        (BARRIER, "barrier"),
+        (BARRIER_GROUPS, "barrier_groups"),
+        (VIEWPORTS, "viewports"),
+        (SCISSORS, "scissors"),
+        (BLEND_FACTOR, "blend_factor"),
+        (HEAPS, "heaps"),
+        (COMPUTE_CONSTANTS, "compute_constants"),
+        (GRAPHICS_CONSTANTS, "graphics_constants"),
+        (TARGETS, "targets"),
+        (CLEAR_RTV, "clear_rtv"),
+        (CLEAR_DSV, "clear_dsv"),
+        (COPY_TEXTURE, "copy_texture_region"),
+        (EXTERNAL, "work of ours"),
+    ];
+    NAMES.iter().find(|(n, _)| *n == op).map(|(_, name)| *name)
+}
+
 fn held<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -365,6 +435,34 @@ pub(crate) fn line(frames: f64) {
         s[2],
         CHUNKS.swap(0, Relaxed) as f64 / frames,
         s[3]
+    );
+    if kinds_on() {
+        kinds_line(frames);
+    }
+}
+
+/// [`kinds_on`]'s line: the six methods most of a frame's calls name, and how
+/// many of them say the same as the call before them.
+fn kinds_line(frames: f64) {
+    let mut seen: Vec<(u64, String)> = KINDS_SEEN
+        .iter()
+        .enumerate()
+        .filter_map(|(op, n)| {
+            let n = n.swap(0, Relaxed);
+            (n > 0).then(|| {
+                let name = name_of(op as u64).map_or_else(|| format!("op {op}"), str::to_owned);
+                (n, name)
+            })
+        })
+        .collect();
+    seen.sort_by(|a, b| b.0.cmp(&a.0));
+    let top: Vec<String> =
+        seen.iter().take(6).map(|(n, name)| format!("{name} {:.0}", *n as f64 / frames)).collect();
+    tracing::info!(
+        "list calls translated per frame, by the method they name (VICTORY_THIN_KINDS=1): {}; of them all, {:.0} say the same as the call before them, though the frame names {} methods",
+        top.join(", "),
+        REPEATS.swap(0, Relaxed) as f64 / frames,
+        seen.len()
     );
 }
 
@@ -708,11 +806,26 @@ extern "system" fn copy_texture_region_x(
 fn translate(list: This, stream: &[u64], left: impl Fn() -> bool) -> (u64, bool) {
     let (mut i, mut calls, mut closed) = (0, 0, false);
     let mut skip = left();
+    let kinds = kinds_on();
+    let mut before: Option<(u64, usize, usize)> = None;
     while i < stream.len() {
+        let start = i;
         let (op, len) = (stream[i] & 0xffff, (stream[i] >> 16) as usize);
         let w = &stream[i + 1..i + 1 + len];
         i += 1 + len;
         calls += 1;
+        if kinds {
+            if let Some(slot) = KINDS_SEEN.get(op as usize) {
+                slot.fetch_add(1, Relaxed);
+            }
+            let same = before.is_some_and(|(was, from, had)| {
+                was == op && w == &stream[from + 1..from + 1 + had]
+            });
+            if same {
+                REPEATS.fetch_add(1, Relaxed);
+            }
+            before = Some((op, start, len));
+        }
         if calls % 64 == 0 {
             skip = left();
         }

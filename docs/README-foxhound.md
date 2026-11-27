@@ -123,7 +123,7 @@ between a frame that runs and one that waits for the disk. Two things changed fo
   half the upload reserves (256 MiB to start an upload, 128 for a one-shot bake, 512 to grow a block, against
   512 / 256 / 1024), half the snapshot buffers, half the staging blocks, a quarter of the card's empty texture
   blocks, 64 MiB of spare list scratch instead of 128, four threads for the bytes under flights' writes instead
-  of six, half the processors (at most eight) translating lists, half the pipeline workers, and nothing
+  of six, four less than the PC's processors (at most twelve) translating lists, half the pipeline workers, and nothing
   speculative staged once free physical memory is under 768 MiB. A card whose budget is 9 GiB or less keeps
   1 GiB of it free for the host's own allocations, where its 90 % line left about 780 MiB on an 8 GB card.
   It also starts shedding memory later than on a big machine: pressure begins at 2 GiB of free physical memory

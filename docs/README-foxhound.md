@@ -161,13 +161,15 @@ The first run of a build compiles pipelines while playing and stutters. Runs wri
 makes (`VICTORY_PIPELINE_BOOK=1`, set by the launcher); afterwards make them all ahead:
 
 ```powershell
-$env:VICTORY_HOST_WAVE = '32'
-target\release\victory.exe warm --used
+target\release\victory.exe preload
 ```
 
-`warm` alone makes every pipeline the book knows; `--used` only the ones earlier runs drew with first (a few
-minutes, and it says how many there are before it starts). The NVIDIA driver keeps its compiled pipelines
-**per program path**: a build run from another folder starts cold.
+`preload` translates every shader, then makes the pipelines the book knows, then stores what the title needs while
+loading in the pipeline library it starts with; stopped, it goes on where it was next time. Over a title folder of
+its own: `preload 'D:\GTA\game folder'`. It is also the F1 menu's **PRELOAD SHADERS**, which has the launcher do it
+before the title starts. By hand, the older way is `warm` (every pipeline the book knows) or `warm --used` (only
+the ones earlier runs drew with first: a few minutes, and it says how many there are before it starts). The NVIDIA
+driver keeps its compiled pipelines **per program path**: a build run from another folder starts cold.
 
 ## Switches worth knowing
 

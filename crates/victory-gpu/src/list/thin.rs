@@ -213,14 +213,17 @@ fn name_of(op: u64) -> Option<&'static str> {
         (Plain::EXECUTE_INDIRECT as u64, "execute_indirect"),
         (Plain::COPY_BUFFER as u64, "copy_buffer_region"),
         (Plain::COPY_RESOURCE as u64, "copy_resource"),
+        (Plain::COPY_RESOURCE_X as u64, "copy_resource_x"),
         (Plain::COPY_MEMORY as u64, "copy_memory"),
         (Plain::RESOLVE as u64, "resolve"),
+        (Plain::RESOLVE_QUERIES as u64, "resolve_queries"),
         (Plain::TOPOLOGY as u64, "topology"),
         (Plain::STENCIL_REF as u64, "stencil_ref"),
         (Plain::DEPTH_BOUNDS as u64, "depth_bounds"),
-        (Plain::INDEX_BUFFER as u64, "index_buffer"),
-        (Plain::VERTEX_BUFFERS as u64, "vertex_buffers"),
+        (Plain::WRITE32 as u64, "write32"),
+        (Plain::WRITE64 as u64, "write64"),
         (Plain::WAIT_VALUE as u64, "wait_value"),
+        (Plain::WAIT_VALUE64 as u64, "wait_value64"),
         (Plain::SYNC as u64, "sync"),
         (RESET, "reset"),
         (CLOSE, "close"),
@@ -233,13 +236,20 @@ fn name_of(op: u64) -> Option<&'static str> {
         (HEAPS, "heaps"),
         (COMPUTE_CONSTANTS, "compute_constants"),
         (GRAPHICS_CONSTANTS, "graphics_constants"),
+        (INDEX_BUFFER, "index_buffer"),
+        (VERTEX_BUFFERS, "vertex_buffers"),
         (TARGETS, "targets"),
         (CLEAR_RTV, "clear_rtv"),
         (CLEAR_DSV, "clear_dsv"),
         (COPY_TEXTURE, "copy_texture_region"),
         (EXTERNAL, "work of ours"),
     ];
-    NAMES.iter().find(|(n, _)| *n == op).map(|(_, name)| *name)
+    for &(number, name) in NAMES {
+        if number == op {
+            return Some(name);
+        }
+    }
+    None
 }
 
 fn held<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -444,20 +454,24 @@ pub(crate) fn line(frames: f64) {
 /// [`kinds_on`]'s line: the six methods most of a frame's calls name, and how
 /// many of them say the same as the call before them.
 fn kinds_line(frames: f64) {
-    let mut seen: Vec<(u64, String)> = KINDS_SEEN
+    let mut seen: Vec<(u64, String)> = Vec::new();
+    for (op, count) in KINDS_SEEN.iter().enumerate() {
+        let n = count.swap(0, Relaxed);
+        if n == 0 {
+            continue;
+        }
+        let name = match name_of(op as u64) {
+            Some(name) => name.to_owned(),
+            None => format!("op {op}"),
+        };
+        seen.push((n, name));
+    }
+    seen.sort_by_key(|(n, _)| std::cmp::Reverse(*n));
+    let top: Vec<String> = seen
         .iter()
-        .enumerate()
-        .filter_map(|(op, n)| {
-            let n = n.swap(0, Relaxed);
-            (n > 0).then(|| {
-                let name = name_of(op as u64).map_or_else(|| format!("op {op}"), str::to_owned);
-                (n, name)
-            })
-        })
+        .take(6)
+        .map(|(n, name)| format!("{name} {:.0}", *n as f64 / frames))
         .collect();
-    seen.sort_by(|a, b| b.0.cmp(&a.0));
-    let top: Vec<String> =
-        seen.iter().take(6).map(|(n, name)| format!("{name} {:.0}", *n as f64 / frames)).collect();
     tracing::info!(
         "list calls translated per frame, by the method they name (VICTORY_THIN_KINDS=1): {}; of them all, {:.0} say the same as the call before them, though the frame names {} methods",
         top.join(", "),

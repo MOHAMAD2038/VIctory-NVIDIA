@@ -5,6 +5,7 @@
 #   .\scripts\play-foxhound.ps1 -Exe ... -Dlss off            the title's own upscaling, no DLSS
 #   .\scripts\play-foxhound.ps1 -Exe ... -Dlss balanced -FrameGen
 #   .\scripts\play-foxhound.ps1 -Exe ... -SeriesS             Series S profile (1280x720 inside, faster, softer)
+#   .\scripts\play-foxhound.ps1 -Exe ... -Lite                small-card preset (1080p scene, VRAM headroom, fewer artifacts)
 #   .\scripts\play-foxhound.ps1 -Exe ... -Build diag          diagnostics build (slower; captures, timelines)
 #   .\scripts\play-foxhound.ps1 -Exe ... -More @{VICTORY_AMBIENT_SPECULAR='0'}   add or override switches
 #
@@ -18,6 +19,10 @@ param(
     [Parameter(Mandatory)][string]$Exe,
     [ValidateSet('diag', 'release')][string]$Build = 'release',
     [switch]$SeriesS,
+    # -Lite: a preset for small cards (6-8 GB of VRAM): 1080p scene upscaled to the output, no
+    # DLSS/FrameGen, absolute VRAM headroom, and the torn-piece checker (fewer artifacts). It stands
+    # over a saved F1 menu; -More still overrides any of it. Run `victory warm --used` once first.
+    [switch]$Lite,
     # 1440: output and scene 2560x1440 (Series X, the image is patched); 1080to1440: scene 1920x1080 upscaled by
     # the title; 4k: the stock Series X output (3840x2160).
     [ValidateSet('1440', '1080to1440', '4k')][string]$Res = '1440',
@@ -57,6 +62,8 @@ if ($menu.Contains('VICTORY_MENU_FRAMEGEN')) {
     if ($menu['VICTORY_MENU_FRAMEGEN'] -match '^[2-6]$') { $timesWanted = [int]$menu['VICTORY_MENU_FRAMEGEN'] }
 }
 if ($menu['VICTORY_MENU_FPS'] -match '^\d+$' -and [int]$menu['VICTORY_MENU_FPS'] -ge 1 -and [int]$menu['VICTORY_MENU_FPS'] -le 1000) { $fpsWanted = [int]$menu['VICTORY_MENU_FPS'] }
+# -Lite forces the light picture choices even over a saved menu (a stale 1440p/FrameGen entry must not win).
+if ($Lite) { $Res = '1080to1440'; $Dlss = 'off'; $FrameGen = $false }
 $settings = @{
     # Submission and copy machinery
     VICTORY_THIN = '1'; VICTORY_JOIN_PARTS = '8'; VICTORY_RELAY = '2'; VICTORY_RELAY_COPY = '1'; VICTORY_WIDE_BACK = '1'
@@ -109,6 +116,20 @@ foreach ($k in $menu.Keys) {
     if ($k -like 'VICTORY_MENU_*') { continue }
     if ($menu[$k]) { $settings[$k] = $menu[$k] } else { $settings.Remove($k) }
 }
+# -Lite: applied after the saved menu so its switches stand; the -More loop below still overrides.
+if ($Lite) {
+    $settings.Remove('VICTORY_NATIVE_1440P'); $settings.VICTORY_RENDER_1080P = '1'
+    foreach ($k in 'VICTORY_TEXTURE_ROOM_PERCENT','VICTORY_DLSS','VICTORY_DLSS_MODE','VICTORY_FRAMEGEN','VICTORY_FRAMEGEN_X') { $settings.Remove($k) }
+    # Absolute VRAM headroom on a small card; let the targets reserve settle; keep small buffers in RAM.
+    $settings.VICTORY_TEXTURE_HEADROOM_MB = '1024'
+    $settings.VICTORY_CARD_ROOM_FOR_TARGETS_MB = '1024'
+    $settings.VICTORY_CARD_BUFFERS_MIN_KB = '1024'
+    # Re-fetch torn card copies (with VICTORY_RELAY_COPY) so stale bytes do not reach the picture: fewer artifacts.
+    $settings.VICTORY_FETCH_CHECK = '1'
+    # Small constant fills go on without waiting for every flight's copy-back (~30 ms a frame). If constants
+    # look stale in a new area, turn it off: -More @{VICTORY_FILL_TITLE='0'}.
+    $settings.VICTORY_FILL_TITLE = '1'
+}
 foreach ($k in $More.Keys) { $settings[$k] = $More[$k] }
 $console = if ($SeriesS) { 'series-s' } else { 'series-x' }
 # For the menu: what it shows as the current choices, where it saves, and how it starts the game again
@@ -120,7 +141,7 @@ $settings.VICTORY_MENU_FRAMEGEN = if ($settings.VICTORY_FRAMEGEN -eq '1') { [str
 $settings.VICTORY_MENU_FPS = [string]$fpsWanted
 $settings.VICTORY_MENU_FILE = $menuFile
 $settings.VICTORY_MENU_PLAY = $MyInvocation.MyCommand.Path
-$settings.VICTORY_MENU_ARGS = "-Exe '$($Exe -replace "'", "''")' -Build $Build$(if ($NoFrameGenReady) { ' -NoFrameGenReady' })"
+$settings.VICTORY_MENU_ARGS = "-Exe '$($Exe -replace "'", "''")' -Build $Build$(if ($NoFrameGenReady) { ' -NoFrameGenReady' })$(if ($Lite) { ' -Lite' })"
 
 $victory = Join-Path $repo "target\$Build\victory.exe"
 if (-not (Test-Path $victory)) {

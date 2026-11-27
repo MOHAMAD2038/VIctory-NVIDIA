@@ -332,11 +332,13 @@ pub(crate) fn each(count: usize, f: &(dyn Fn(usize) + Sync)) {
 }
 
 /// [`Pool::each`] on threads kept for the title's bytes under flights' writes
-/// (`VICTORY_UNDER_THREADS`, 6 with this one).
+/// (`VICTORY_UNDER_THREADS`, 6 with this one; 4 on a 16 GB PC,
+/// [`crate::low_vram::under_threads`]).
 pub(crate) fn each_under(count: usize, f: &(dyn Fn(usize) + Sync)) {
     static POOL: OnceLock<&'static Pool> = OnceLock::new();
     POOL.get_or_init(|| {
-        let threads = std::env::var("VICTORY_UNDER_THREADS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(6usize);
+        let asked = std::env::var("VICTORY_UNDER_THREADS").ok().and_then(|v| v.trim().parse().ok());
+        let threads = asked.unwrap_or_else(|| crate::low_vram::under_threads(crate::low_vram::ram()));
         Pool::new("victory-under", threads.clamp(1, 16))
     })
     .each(count, f);

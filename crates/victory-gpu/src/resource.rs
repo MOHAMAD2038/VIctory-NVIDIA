@@ -1980,14 +1980,28 @@ pub(crate) fn room_percent() -> u64 {
 
 /// The line [`room`] weighs the card's use against, in bytes of a budget
 /// of `budget`: `VICTORY_TEXTURE_ROOM_PERCENT`'s share of it if set, else
-/// [`line_for`] it.
+/// [`line_for`] it, lowered to keep `VICTORY_TEXTURE_HEADROOM_MB` free if
+/// that is set ([`line_with_headroom`]; the share switch wins over it).
+/// Without the switch, a card of 9 GiB or less keeps
+/// [`crate::low_vram::card_headroom`] free.
 #[cfg(windows)]
 pub(crate) fn room_line(budget: u64) -> u64 {
     static SET: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if *SET.get_or_init(|| std::env::var_os("VICTORY_TEXTURE_ROOM_PERCENT").is_some()) {
         budget / 100 * room_percent()
     } else {
-        line_for(budget)
+        static HEADROOM: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+        let asked = *HEADROOM.get_or_init(|| {
+            std::env::var("VICTORY_TEXTURE_HEADROOM_MB").ok().and_then(|v| v.trim().parse::<u64>().ok())
+        });
+        // A value the switch cannot be read as was always 0 (no headroom of
+        // its own): `-MB` set means the switch was meant, so it is not then
+        // overruled by the card. Unset: the card's budget decides.
+        let headroom = match asked {
+            Some(mb) => mb.saturating_mul(1 << 20),
+            None => crate::low_vram::card_headroom(budget),
+        };
+        line_with_headroom(budget, line_for(budget), headroom)
     }
 }
 
@@ -1997,10 +2011,32 @@ pub(crate) fn room_line(budget: u64) -> u64 {
 /// under 90 % of it. A flat 90 % left 1,060 MB of a 10,600 MB budget unused
 /// while new textures waited (2026-11-26 16:52 run: "no room" at 9,526 to
 /// 9,881 MB weighed against 9,519 to 9,583); this gives about 290 MB of it
-/// to textures there, and keeps 90 % on cards of 7.5 GB or less.
+/// to textures there, and keeps 90 % on cards of 7.5 GB or less. On such a
+/// card the free part is small in absolute bytes (410 MiB of a 4 GiB
+/// budget) while the bursts above do not scale with the card;
+/// `VICTORY_TEXTURE_HEADROOM_MB` keeps more ([`line_with_headroom`]).
 #[cfg(any(windows, test))]
 fn line_for(budget: u64) -> u64 {
     budget.saturating_sub((768u64 << 20).max(budget / 20)).max(budget / 100 * 90)
+}
+
+/// [`line_for`]'s `line` with the least bytes `VICTORY_TEXTURE_HEADROOM_MB`
+/// keeps free (`headroom`, in bytes; 0 or unset: the line as it was). The
+/// 90 % floor rules `line_for` on cards of 7.5 GB or less, so a change to
+/// the margin alone does nothing there: this lowers the line after the
+/// floor, for the host's own allocations that are made with no room test
+/// ([`targets_room_kept`]). It only ever lowers the line (the default
+/// margin still applies), and never under half the budget, the share
+/// switch's least ([`room_percent`]), so a mistyped value cannot starve
+/// the texture queue. Both readers of the line tighten together: the
+/// queue's admission ([`room`]) and the sweep's aim (`let_go_idle`,
+/// `crate::host::vram_keep_below`).
+#[cfg(any(windows, test))]
+fn line_with_headroom(budget: u64, line: u64, headroom: u64) -> u64 {
+    if headroom == 0 {
+        return line;
+    }
+    line.min(budget.saturating_sub(headroom)).max(budget / 2)
 }
 
 /// For the card accounting line ([`card_accounting`]): the title texture
@@ -4822,6 +4858,40 @@ float4 lit() : SV_Target { return 1.0; }
         // 6 GB: 90 % (768 MiB would be more than a tenth).
         assert_eq!(line_for(6_000 * MIB), 6_000 * MIB / 100 * 90);
         assert_eq!(line_for(0), 0);
+    }
+
+    /// The optional headroom (`VICTORY_TEXTURE_HEADROOM_MB`) only lowers
+    /// the line, never under half the budget; without it the line is
+    /// exactly as before, on small cards and large.
+    #[test]
+    fn headroom_only_lowers_the_room_line() {
+        const MIB: u64 = 1 << 20;
+        let small = 4 * 1024 * MIB;
+        let line = line_for(small);
+        let big = 24_000 * MIB;
+        // Unset (0): the default line, untouched.
+        assert_eq!(line_with_headroom(small, line, 0), line);
+        assert_eq!(line_with_headroom(big, line_for(big), 0), line_for(big));
+        // 1 GiB kept on a 4 GiB card: 3 GiB, under the 90 % floor (which
+        // leaves only 410 MiB free).
+        assert_eq!(line_with_headroom(small, line, 1024 * MIB), 3 * 1024 * MIB);
+        // Less than the line already keeps: nothing changes.
+        assert_eq!(line_with_headroom(small, line, 256 * MIB), line);
+        assert_eq!(line_with_headroom(big, line_for(big), 768 * MIB), line_for(big));
+        // However large the headroom, half the budget stays (and no
+        // overflow); a budget of 0 gives 0.
+        assert_eq!(line_with_headroom(small, line, u64::MAX), small / 2);
+        assert_eq!(line_with_headroom(0, 0, 1024 * MIB), 0);
+        // Whatever the budget and the headroom: never above the default
+        // line, never under half the budget, never above the budget.
+        for mb in [1u64, 100, 4096, 6000, 7680, 10_600, 15_360, 24_000, 1 << 20] {
+            let budget = mb * MIB;
+            let line = line_for(budget);
+            for head in [1u64, 256, 768, 1024, 4096, u64::MAX >> 20] {
+                let kept = line_with_headroom(budget, line, head * MIB);
+                assert!(kept <= line && kept >= budget / 2 && kept <= budget);
+            }
+        }
     }
 
     /// The room kept for render targets goes once the world's targets are

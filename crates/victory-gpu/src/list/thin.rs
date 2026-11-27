@@ -299,8 +299,17 @@ fn back_list(kind: u32) -> This {
     list
 }
 
+/// The threads that translate lists (`VICTORY_THIN_THREADS`): eight as
+/// measured, unless the PC is a 16 GB one — there the title's own workers
+/// want the same processors ([`crate::low_vram::thin_threads`]).
 fn start() {
-    let threads = std::env::var("VICTORY_THIN_THREADS").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(8usize).clamp(1, 32);
+    let asked = std::env::var("VICTORY_THIN_THREADS").ok().and_then(|v| v.trim().parse().ok());
+    let threads = asked
+        .unwrap_or_else(|| {
+            let processors = std::thread::available_parallelism().map_or(4, |n| n.get());
+            crate::low_vram::thin_threads(crate::low_vram::ram(), processors)
+        })
+        .clamp(1, 32);
     for i in 0..threads {
         let worker = move || {
             crate::cores::keep_many_on_fast_cores("victory-list");

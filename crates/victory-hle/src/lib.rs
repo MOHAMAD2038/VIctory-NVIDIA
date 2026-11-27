@@ -24,6 +24,9 @@ pub mod runtime;
 pub use host::HostPolicy;
 pub use registry::{HleExport, HleModule, registry};
 pub use victory_gpu::console;
+/// The plan for smaller PCs (16 GB of RAM): what `victory play` reads to
+/// take that profile by itself (`low_vram::small_pc`).
+pub use victory_gpu::low_vram;
 /// DLSS and frame generation (`VICTORY_DLSS`, `VICTORY_FRAMEGEN`).
 #[cfg(windows)]
 pub use victory_gpu::streamline;

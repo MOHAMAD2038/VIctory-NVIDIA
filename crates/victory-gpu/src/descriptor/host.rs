@@ -1716,10 +1716,8 @@ fn view_elements(view: &View) -> Option<(u32, bool, u32)> {
 /// position) are one: they shared the buffer's copy, the host made no raw
 /// view of them, and the slot stayed null.
 fn off_elements(offset: u64, stride: u32, raw: bool, element: u64) -> bool {
-    if raw {
-        !offset.is_multiple_of(16)
-    } else if stride > 0 {
-        // (Structured: made raw, so on 16 bytes.)
+    // (A raw view, and a structured one, which is made raw: on 16 bytes.)
+    if raw || stride > 0 {
         !offset.is_multiple_of(16)
     } else {
         element > 0 && !offset.is_multiple_of(element)

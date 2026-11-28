@@ -967,9 +967,11 @@ mod tests {
         }
         assert_eq!(kept(11_229 << 20), SPARE_KEPT);
         assert_eq!(kept(7_692 << 20), SMALL_KEPT);
-        // Four blocks of 64 MiB is 256 MiB: half of the 512 MiB of
-        // `STAGING_KEPT`; sixteen is 1 GiB.
-        assert_eq!((SMALL_KEPT as u64, STAGING_KEPT as u64), (1 << 30) / BLOCK, (512 << 20) / BLOCK);
+        // Sixteen blocks of 64 MiB is the 1 GiB `SMALL_KEPT` (an 8 GB card's empty
+        // blocks); eight is the 512 MiB of `STAGING_KEPT`, and half of that on a
+        // tight PC.
+        assert_eq!(SMALL_KEPT as u64 * BLOCK, 1 << 30);
+        assert_eq!(STAGING_KEPT as u64 * BLOCK, 512 << 20);
         assert_eq!(staging_kept(crate::low_vram::Ram::Tight), STAGING_KEPT / 2);
         assert_eq!(staging_kept(crate::low_vram::Ram::Limited), STAGING_KEPT);
     }

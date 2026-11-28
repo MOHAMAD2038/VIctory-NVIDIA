@@ -4441,7 +4441,7 @@ fn raw_window(offset: u64, first: u64, count: u32, stride: u32) -> Option<(u64, 
     }
     let start = first.checked_mul(u64::from(stride))?.checked_add(offset)?;
     let bytes = u64::from(count) * u64::from(stride);
-    (start % 16 == 0 && bytes % 4 == 0)
+    (start.is_multiple_of(16) && bytes.is_multiple_of(4))
         .then(|| u32::try_from(bytes / 4).ok().map(|dwords| (start / 4, dwords)))
         .flatten()
 }

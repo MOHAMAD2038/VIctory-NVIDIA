@@ -160,6 +160,9 @@ const LOW_FPS: u32 = 30;
 /// on): the Series X profile at 2560x1440, DLSS quality.
 const USUAL_RES: &str = "1440";
 const USUAL_DLSS: &str = "quality";
+/// The rate a start without `--fps` plays at (the title's own cap is 1000: no
+/// cap at all, as `--fps` puts it).
+const USUAL_FPS: u32 = 1000;
 
 #[derive(clap::Args, Clone, Debug)]
 pub(crate) struct Play {
@@ -397,7 +400,7 @@ fn settings(o: &Play, menu: &[(String, String)], streamline: Option<&Path>) -> (
         .and_then(|f| f.parse::<u32>().ok())
         .filter(|f| (1..=1000).contains(f))
         .or(o.fps)
-        .unwrap_or(if low { LOW_FPS } else { 1000 });
+        .unwrap_or(if low { LOW_FPS } else { USUAL_FPS });
 
     let mut s: BTreeMap<String, String> = SETTINGS.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())).collect();
     let mut set = |k: &str, v: &str| drop(s.insert(k.to_owned(), v.to_owned()));
@@ -419,7 +422,7 @@ fn settings(o: &Play, menu: &[(String, String)], streamline: Option<&Path>) -> (
     {
         dlss_on = true;
         set("VICTORY_DLSS", "1");
-        set("VICTORY_DLSS_MODE", &dlss);
+        set("VICTORY_DLSS_MODE", dlss);
         set("VICTORY_STREAMLINE_DIR", &dir.to_string_lossy());
         if framegen {
             framegen_x = Some(times);
@@ -1049,19 +1052,30 @@ fn quoted(text: &str) -> String {
 /// this start's own options, so those given on the command line (`--series-s`,
 /// `--dlss`, `--framegen`, `--set` ...) are kept. Values saved in the F1 menu
 /// still win over them, as at every start. A preload is not asked again.
+/// `--res`, `--dlss` and `--fps` are always written, with the usual choice
+/// where the start was given none (they are optional now, so a start that
+/// leaves them out would otherwise restart with them missing).
 fn restart_args(o: &Play, exe: &Path) -> String {
     let mut args = vec!["play".to_owned(), quoted(&exe.to_string_lossy())];
     if o.series_s {
         args.push("--series-s".to_owned());
     }
-    args.extend(["--res".to_owned(), quoted(&o.res), "--dlss".to_owned(), quoted(&o.dlss)]);
+    // `--res` and `--dlss` with what the start settled on, so the same options again.
+    let chosen = |given: Option<&str>, usual: &str| given.unwrap_or(usual).to_owned();
+    args.extend(["--res".to_owned(), quoted(&chosen(o.res.as_deref(), USUAL_RES))]);
+    args.extend(["--dlss".to_owned(), quoted(&chosen(o.dlss.as_deref(), USUAL_DLSS))]);
     if let Some(x) = o.framegen {
         args.extend(["--framegen".to_owned(), x.to_string()]);
     }
     if o.framegen_ready && !o.no_framegen_ready {
         args.push("--framegen-ready".to_owned());
     }
-    args.extend(["--fg-type".to_owned(), quoted(&o.fg_type), "--fps".to_owned(), o.fps.to_string()]);
+    args.extend([
+        "--fg-type".to_owned(),
+        quoted(&o.fg_type),
+        "--fps".to_owned(),
+        o.fps.unwrap_or(USUAL_FPS).to_string(),
+    ]);
     for more in &o.more {
         args.extend(["--set".to_owned(), quoted(more)]);
     }

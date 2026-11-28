@@ -1894,7 +1894,7 @@ impl<'a> Lower<'a> {
                 // console threads go to host waves in the order the waves take them (`wave_base`)
                 halves = Some(s.lds_dwords);
                 s.lds_dwords += 1;
-                if PAIR_MEETINGS.get() && group > 64 && group % 64 == 0 && (split_lds || exchange.is_some()) {
+                if PAIR_MEETINGS.get() && group > 64 && group.is_multiple_of(64) && (split_lds || exchange.is_some()) {
                     // a counter per console wave, then two exchange buffers of four dwords each
                     pairs = Some(s.lds_dwords);
                     pair_waves = group / 64;
@@ -10918,7 +10918,7 @@ impl<'a> Lower<'a> {
                         }
                         8..=11 => {
                             let src = if pick < 10 { b } else { a };
-                            let bit = if pick % 2 == 0 { 15 } else { 31 };
+                            let bit = if pick.is_multiple_of(2) { 15 } else { 31 };
                             let left = k(self, 31 - bit);
                             let t = self.s.m.bin(c, Bin::Shl, src, left);
                             let k31 = k(self, 31);

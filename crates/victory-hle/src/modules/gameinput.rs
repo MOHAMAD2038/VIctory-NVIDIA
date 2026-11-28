@@ -1369,10 +1369,14 @@ mod host {
                 .map(|(i, vk)| KeyState {
                     // A scripted letter is the stand-in pad's key of that
                     // name, where a US layout has it (`pad_key`).
-                    scan_code: Some(vk).filter(|_| i < scripted_keys).and_then(super::letter_position).unwrap_or_else(|| {
-                        // SAFETY: plain query.
-                        unsafe { MapVirtualKeyW(u32::from(vk), MAPVK_VK_TO_VSC_EX) }
-                    }),
+                    // (A letter the pad has no place for has no position there: its own scan
+                    // code is then the fallback.)
+                    scan_code: super::letter_position(vk)
+                        .filter(|_| i < scripted_keys)
+                        .unwrap_or_else(|| {
+                            // SAFETY: plain query.
+                            unsafe { MapVirtualKeyW(u32::from(vk), MAPVK_VK_TO_VSC_EX) }
+                        }),
                     virtual_key: vk,
                     // shortcut: no characters (code point 0);
                     // the title reads scan codes and virtual keys only.

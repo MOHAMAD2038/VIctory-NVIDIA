@@ -1711,7 +1711,7 @@ fn workers() -> &'static Workers {
                                 std::hint::spin_loop();
                             }
                             turns = turns.wrapping_add(1);
-                            if turns % 16 == 0 {
+                            if turns.is_multiple_of(16) {
                                 std::thread::yield_now();
                             }
                         }
@@ -6112,7 +6112,7 @@ mod window_tests {
         for g in [64u64 << 10, 256 << 10, 1 << 20, WINDOW] {
             let (start, len) = window_of(address, end, g);
             assert!(start <= address && start + len >= end);
-            assert!(start % g == 0 && len % g == 0);
+            assert!(start.is_multiple_of(g) && len.is_multiple_of(g));
         }
     }
 }

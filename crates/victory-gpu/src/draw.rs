@@ -1127,7 +1127,7 @@ fn root_view(list: &HostList, address: u64, srv: bool) -> Option<u64> {
         .left(address)
         .min(if srv { limit } else { 1 << 16 });
     let gpu = shadow.gpu(address);
-    if srv || gpu % 256 == 0 {
+    if srv || gpu.is_multiple_of(256) {
         shadow.refresh(list, address, len);
         #[cfg(feature = "diagnostics")]
         crate::book::root(gpu, len);
@@ -1172,7 +1172,7 @@ fn heap_buffer_pass(heap: &crate::descriptor::Heap, host: &crate::descriptor::ho
     let mut kept = host.buffer_sweep.lock().unwrap_or_else(|e| e.into_inner());
     let BufferSweep { passes, ranges, unwatched } = &mut *kept;
     let changed = host.buffer_changes();
-    let all = *passes == 0 || (*passes % HEAP_ROUND == 0 && !heap_spread());
+    let all = *passes == 0 || ((*passes).is_multiple_of(HEAP_ROUND) && !heap_spread());
     let slots = if all {
         ranges.0.clear();
         host.buffer_slots()
@@ -5261,7 +5261,7 @@ impl State {
                         let step = offset.saturating_sub(last);
                         let walks = step >= u64::from(stride)
                             && step <= 256
-                            && step % 4 == 0
+                            && step.is_multiple_of(4)
                             && (w.records == 1 || step == u64::from(w.step));
                         if walks {
                             let fit = (args.left(arguments) / step).min(WINDOW_MOST) as u32;

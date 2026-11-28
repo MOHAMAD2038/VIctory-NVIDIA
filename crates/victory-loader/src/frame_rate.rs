@@ -288,7 +288,7 @@ mod tests {
             let place = VirtualAlloc(std::ptr::null(), 0x10000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE) as *mut u8;
             assert!(!place.is_null());
             // Windows of bytes of our own (int3s): one as expected, one that differs.
-            let bytes: Vec<u8> = (0..56).map(|n| if n % 7 == 0 { 0x90 } else { 0xcc }).collect();
+            let bytes: Vec<u8> = (0..56).map(|n: u8| if n.is_multiple_of(7) { 0x90 } else { 0xcc }).collect();
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), place.add(0x100), bytes.len());
             let mut other = bytes.clone();
             other[2] = 0x14;

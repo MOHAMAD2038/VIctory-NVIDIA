@@ -388,7 +388,7 @@ pub(crate) fn removal_note() -> String {
     let bytes = unsafe { std::slice::from_raw_parts(at as *const u8, len) };
     let (mut zero, mut looked, mut first) = (0u64, 0u64, None);
     for (n, page) in bytes.chunks(4096).enumerate() {
-        if n % 4096 == 0 && started.elapsed() > std::time::Duration::from_secs(2) {
+        if n.is_multiple_of(64) && started.elapsed() > std::time::Duration::from_secs(2) {
             break;
         }
         looked += 1;

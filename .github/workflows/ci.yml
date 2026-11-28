@@ -4,9 +4,13 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Run it on a branch on demand too (the fork has no other way to re-check one).
+  workflow_dispatch:
 
 permissions:
   contents: read
+  # Only for the clippy step's failure report (below).
+  pull-requests: write
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -25,9 +29,24 @@ jobs:
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings 2>&1 | Tee-Object clippy.txt | Out-Host
       - name: Clippy, diagnostics build
-        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings 2>&1 | Tee-Object clippy-all-features.txt | Out-Host
+      # A failing run's log cannot always be read, so the output of whichever
+      # clippy step failed also goes into a comment on the pull request.
+      - name: The failing step's output, in a comment
+        if: failure() && github.event_name == 'pull_request'
+        run: |
+          $report = ''
+          Get-ChildItem -Path clippy.txt, clippy-all-features.txt, clippy-tests.txt -ErrorAction SilentlyContinue | ForEach-Object {
+            $report += "== $($_.Name)`n" + ((Get-Content -LiteralPath $_.FullName -Tail 150) -join "`n") + "`n`n"
+          }
+          if ($report -eq '') { $report = 'no output was written' }
+          "A step failed on ${{ github.sha }}.`n`n~~~`n$report`n~~~" |
+            Set-Content -Path clippy-comment.md
+          gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" -X POST -F body=@clippy-comment.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       # Includes xtask's repository_passes_policy, the asset-policy check.
       - name: Tests
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --locked 2>&1 | Tee-Object clippy-tests.txt | Out-Host

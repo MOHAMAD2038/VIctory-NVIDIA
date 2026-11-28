@@ -34,19 +34,19 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings 2>&1 | Tee-Object clippy-all-features.txt | Out-Host
       # A failing run's log cannot always be read, so the output of whichever
       # clippy step failed also goes into a comment on the pull request.
-      - name: Clippy's output, in a comment
+      - name: The failing step's output, in a comment
         if: failure() && github.event_name == 'pull_request'
         run: |
           $report = ''
-          Get-ChildItem -Path clippy*.txt -ErrorAction SilentlyContinue | ForEach-Object {
+          Get-ChildItem -Path clippy.txt, clippy-all-features.txt, clippy-tests.txt -ErrorAction SilentlyContinue | ForEach-Object {
             $report += "== $($_.Name)`n" + ((Get-Content -LiteralPath $_.FullName -Tail 150) -join "`n") + "`n`n"
           }
           if ($report -eq '') { $report = 'no output was written' }
-          "The Clippy step failed on ${{ github.sha }}.`n`n~~~`n$report`n~~~" |
+          "A step failed on ${{ github.sha }}.`n`n~~~`n$report`n~~~" |
             Set-Content -Path clippy-comment.md
           gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" -X POST -F body=@clippy-comment.md
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       # Includes xtask's repository_passes_policy, the asset-policy check.
       - name: Tests
-        run: cargo test --workspace --locked
+        run: cargo test --workspace --locked 2>&1 | Tee-Object clippy-tests.txt | Out-Host

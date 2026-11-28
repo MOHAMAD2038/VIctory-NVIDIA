@@ -4441,7 +4441,7 @@ fn raw_window(offset: u64, first: u64, count: u32, stride: u32) -> Option<(u64, 
     }
     let start = first.checked_mul(u64::from(stride))?.checked_add(offset)?;
     let bytes = u64::from(count) * u64::from(stride);
-    (start % 16 == 0 && bytes % 4 == 0)
+    (start.is_multiple_of(16) && bytes.is_multiple_of(4))
         .then(|| u32::try_from(bytes / 4).ok().map(|dwords| (start / 4, dwords)))
         .flatten()
 }
@@ -5459,7 +5459,7 @@ mod changed_records_tests {
             let mut now = last.clone();
             let mut differ = Vec::new();
             for slot in 0..count {
-                if random() % 9 == 0 {
+                if random().is_multiple_of(9) {
                     now[slot * step + random() % step] ^= 1 + (random() % 255) as u8;
                     differ.push(1000 + slot as u32);
                 }
@@ -6606,7 +6606,7 @@ mod tests {
             set.put(slot);
         }
         assert_eq!(set.all(|_| true), [0, 63, 64, 130, 199]);
-        assert_eq!(set.all(|slot| slot % 2 == 0), [0, 64, 130]);
+        assert_eq!(set.all(|slot| slot.is_multiple_of(2)), [0, 64, 130]);
         assert!(set.remove(64) && !set.remove(64) && !set.remove(5));
         assert_eq!(set.take(), [0, 63, 130, 199]);
         assert!(set.take().is_empty());

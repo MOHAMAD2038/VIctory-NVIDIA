@@ -4,6 +4,8 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Run it on a branch on demand too (the fork has no other way to re-check one).
+  workflow_dispatch:
 
 permissions:
   contents: read

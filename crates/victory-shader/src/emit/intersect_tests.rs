@@ -314,7 +314,7 @@ fn scene() -> (Scene, Vec<Vec<Case>>) {
             std::array::from_fn(|k| c[k % 3] + if k < 3 { -h[k] } else { h[k - 3] })
         });
         let ids: [u32; 4] = std::array::from_fn(|k| 0x1000 * (n + 1) + 8 * k as u32 + 5);
-        if n % 2 == 0 {
+        if n.is_multiple_of(2) {
             box_nodes.push((s.add(nodes::box32(ids, boxes), 32), 5));
         } else {
             box_nodes.push((s.add(nodes::box16(ids, boxes), 16), 4));
@@ -379,7 +379,7 @@ fn scene() -> (Scene, Vec<Vec<Case>>) {
         };
         for k in 0..12 {
             let origin = g.vector(12.0);
-            let direction = if k % 2 == 0 {
+            let direction = if k.is_multiple_of(2) {
                 let b = boxes[(k / 2) % 4];
                 if b[0].is_nan() {
                     g.vector(1.0)
@@ -389,7 +389,7 @@ fn scene() -> (Scene, Vec<Vec<Case>>) {
             } else {
                 g.vector(1.0)
             };
-            let extent = if k % 3 == 0 { 6.0 } else { 100.0 };
+            let extent = if k.is_multiple_of(3) { 6.0 } else { 100.0 };
             cases.push(Some((n, kind, Ray::new(origin, direction, extent))));
         }
     }
@@ -414,7 +414,7 @@ fn scene() -> (Scene, Vec<Vec<Case>>) {
         .enumerate()
         {
             let target = at(w);
-            let origin = if k % 2 == 0 { [0.0; 3] } else { g.vector(16.0) };
+            let origin = if k.is_multiple_of(2) { [0.0; 3] } else { g.vector(16.0) };
             let mut direction: [f32; 3] = std::array::from_fn(|a| target[a] - origin[a]);
             if k == 7 {
                 // The triangle lies behind.

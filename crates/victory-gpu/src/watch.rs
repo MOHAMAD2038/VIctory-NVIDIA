@@ -4465,7 +4465,7 @@ mod tests {
                 assert_eq!(set.insert(block), other.insert(block));
             }
             assert_eq!(set.contains(block), other.contains(&block));
-            if round % 64 == 0 {
+            if round.is_multiple_of(64) {
                 let a = [0, 63, Blocks::IN_PIECE, 3 * Blocks::IN_PIECE - 70][next(4)] + next(140);
                 let b = a + [next(10), next(300), 2 * Blocks::IN_PIECE + next(100)][next(3)];
                 assert!(set.range(a..b).eq(other.range(a..b).copied()), "{a}..{b}");
@@ -4713,7 +4713,7 @@ mod tests {
                     UNLOCKED_IN_TEST.set(t % 4 != 3);
                     for round in 0..ROUNDS {
                         barrier.wait();
-                        let view = if (round + t) % 3 == 0 { two } else { one };
+                        let view = if (round + t).is_multiple_of(3) { two } else { one };
                         // SAFETY: a word of a view, this thread's own.
                         unsafe { ((view + round % 2 * BLOCK + t * 8) as *mut u64).write_volatile(round as u64) };
                         barrier.wait();

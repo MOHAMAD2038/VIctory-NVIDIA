@@ -596,15 +596,15 @@ mod tests {
                     now[i] = random() as u8;
                 }
                 let i = random() as usize % 512;
-                title[i] = if (from..to).contains(&i) && round % 3 == 0 { now[i - from] } else { random() as u8 };
+                title[i] = if (from..to).contains(&i) && round.is_multiple_of(3) { now[i - from] } else { random() as u8 };
             }
-            if round % 7 == 0 {
+            if round.is_multiple_of(7) {
                 now.iter_mut().for_each(|b| *b = b.wrapping_add(1));
             }
             // SAFETY: inside the allocation and the vectors.
             let done = unsafe {
                 std::ptr::copy_nonoverlapping(title.as_ptr(), pages.0, 512);
-                merge(pages.0.add(from), now.as_ptr(), held.as_mut_ptr(), n, round % 2 == 0)
+                merge(pages.0.add(from), now.as_ptr(), held.as_mut_ptr(), n, round.is_multiple_of(2))
             };
             assert!(done.there);
             // SAFETY: inside the allocation.

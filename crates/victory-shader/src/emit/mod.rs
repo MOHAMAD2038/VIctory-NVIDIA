@@ -841,7 +841,7 @@ fn widen(
         // (a program whose waves are the host's meets no one: no barrier, any group)
         crate::native::StageIo::Cs(_) if !(native.wave64 && lower::host_max_wave() == 32) => {}
         crate::native::StageIo::Cs(cs) if cs.threads.iter().product::<u32>() == 64 => {}
-        crate::native::StageIo::Cs(cs) if groups && cs.threads.iter().product::<u32>() % 64 == 0 => {}
+        crate::native::StageIo::Cs(cs) if groups && cs.threads.iter().product::<u32>().is_multiple_of(64) => {}
         crate::native::StageIo::Cs(cs) => {
             if why {
                 eprintln!("WAVE64-WIDE not tried: thread groups of {:?}", cs.threads);
@@ -2207,8 +2207,8 @@ mod tests {
             let bad: Vec<_> = lit
                 .iter()
                 .filter(|(n, t)| {
-                    let x = if n % 2 == 0 { 1.0 } else { -1.0 };
-                    let y = if n / 16 % 2 == 0 { 1.0 } else { -1.0 };
+                    let x = if n.is_multiple_of(2) { 1.0 } else { -1.0 };
+                    let y = if (n / 16).is_multiple_of(2) { 1.0 } else { -1.0 };
                     (t[0], t[1]) != (x, y)
                 })
                 .collect();

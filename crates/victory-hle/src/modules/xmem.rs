@@ -1379,7 +1379,7 @@ pub extern "system" fn XMemMapPhysicalPagesScatter(
             // SAFETY: the title passes `n` addresses and, unless null, `n` pages.
             .map(|i| unsafe { (*addresses.add(i) as usize, if pages.is_null() { 0 } else { *pages.add(i) }) })
             .collect();
-        if wanted.iter().all(|w| w.0 % PAGE == 0) {
+        if wanted.iter().all(|w| w.0.is_multiple_of(PAGE)) {
             return scatter(&wanted).into();
         }
     }

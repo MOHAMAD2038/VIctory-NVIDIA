@@ -840,7 +840,7 @@ fn translate(list: This, stream: &[u64], left: impl Fn() -> bool) -> (u64, bool)
             }
             before = Some((op, start, len));
         }
-        if calls % 64 == 0 {
+        if calls.is_multiple_of(64) {
             skip = left();
         }
         if op == UPLOAD {

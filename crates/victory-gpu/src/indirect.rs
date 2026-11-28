@@ -3402,7 +3402,7 @@ void main(uint3 group : SV_GroupID, uint3 thread : SV_DispatchThreadID) {
                 for i in 0..EXECUTIONS {
                     if run == 0 {
                         assert!(record_clamp_as(&gpu.clamp, &gpu.list, (&dst, state), budget_gpu, (&src, u64::from(i % 2048) * 32), None, (2, 12, 1), false));
-                    } else if i % run == 0 {
+                    } else if i.is_multiple_of(run) {
                         let k = u64::from(i / run) * batch::TABLE;
                         batch::record(&pass, &gpu.list, (&dst, state), budget_gpu, [src_gpu; 4], tables_gpu + k);
                         // SAFETY: the mapped table; the list has not run.
@@ -3412,7 +3412,7 @@ void main(uint3 group : SV_GroupID, uint3 thread : SV_DispatchThreadID) {
                     let at = if run == 0 { 0 } else { table.place(1, u64::from(i % 2048) * 32, 2).unwrap() };
                     // SAFETY: an open list; live buffers.
                     unsafe {
-                        if run == 0 || i % run == 0 {
+                        if run == 0 || i.is_multiple_of(run) {
                             gpu.list.SetComputeRootSignature(&gpu.worker.root);
                             gpu.list.SetPipelineState(&gpu.worker.pso);
                             gpu.list.SetComputeRootUnorderedAccessView(0, hits_gpu);

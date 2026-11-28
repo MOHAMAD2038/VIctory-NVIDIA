@@ -545,7 +545,7 @@ mod tests {
         let tone: Vec<f32> = (0..960 * 2)
             .map(|i| {
                 let phase = (i / 2) as f32 * std::f32::consts::TAU / 48_000.0;
-                if i % 2 == 0 {
+                if i.is_multiple_of(2) {
                     (phase * 440.0).sin() * 0.5
                 } else {
                     (phase * 880.0).sin() * 0.25

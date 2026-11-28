@@ -327,11 +327,12 @@ fork has always had; its options:
 
 | Option | What |
 |---|---|
-| *(none)* | Series X profile, 2560x1440, DLSS Quality, no frame rate cap, frame generation ready but off |
+| *(none)* | Series X profile, 2560x1440, DLSS Quality, no frame rate cap, no frame generation (add `-FrameGen` for it; `-FrameGenReady` makes it ready but off for the F1 menu) |
 | `-FrameGen`, `-FrameGenX 4` | frame generation on from the start, 2 to 6 frames shown for each one rendered |
 | `-Dlss off` / `dlaa` / `balanced` / `performance` | the title's own upscaling, or another DLSS mode |
 | `-Fps 60` | a frame rate cap (30 is the title's own) |
 | `-SeriesS` | the Series S profile: 1280x720 inside, faster, softer |
+| `-Lite` | the small-card preset (around 6 to 8 GB of VRAM): 1080p scene upscaled by the title, no DLSS or frame generation, `VICTORY_TEXTURE_HEADROOM_MB=1024` so a gigabyte of the card stays free, a smaller render-target reserve, small buffers kept in RAM, the torn-copy check on. It stands over a saved `victory-settings.txt`; `-More` still overrides any of it. Run `victory warm --used` once first |
 | `-Res 1080to1440` / `4k` | scene at 1080p upscaled by the title / the stock 3840x2160 output |
 | `-FrameGenReady` | frame generation made ready but off, so the F1 menu can switch it while playing (costs frame rate: ready, frames go through Streamline's swap chain; without it, a change in F1 takes effect at the next start) |
 | `-FgType auto` / `dlss` / `fsr` | which frame generation (see the top of this page); FSR 3's DLLs from `VICTORY_FIDELITYFX_DIR`, else `amd-sdk\FidelityFX\bin` here |

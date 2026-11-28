@@ -1,7 +1,9 @@
-﻿//! Host-memory admission for speculative texture work and reusable upload storage.
+//! Host-memory admission for speculative texture work and reusable upload storage.
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+
+use crate::low_vram::Ram;
 
 const MIB: u64 = 1 << 20;
 const GIB: u64 = 1 << 30;
@@ -18,6 +20,9 @@ fn memory_status() -> Option<MEMORYSTATUSEX> {
 // The texture sweep may run for seconds inside a single submitted frame.
 static NEXT_COMMIT_SAMPLE: AtomicU64 = AtomicU64::new(0);
 static AVAILABLE_COMMIT: AtomicU64 = AtomicU64::new(u64::MAX);
+/// Free physical memory at the last sample (`u64::MAX` until the first: a
+/// machine with none free has never been seen to report that).
+static AVAILABLE_PHYSICAL: AtomicU64 = AtomicU64::new(u64::MAX);
 static RETRY_UPLOAD_AT: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn allocation_error(error: &windows::core::Error) {
@@ -51,22 +56,25 @@ fn sample_commit(now: u64) -> u64 {
         && let Some(status) = memory_status()
     {
         AVAILABLE_COMMIT.store(status.ullAvailPageFile, Ordering::Relaxed);
+        AVAILABLE_PHYSICAL.store(status.ullAvailPhys, Ordering::Relaxed);
     }
     AVAILABLE_COMMIT.load(Ordering::Relaxed)
 }
 
-fn has_upload_reserve(commit: u64, bake: bool) -> bool {
+fn has_upload_reserve(commit: u64, bake: bool, ram: Ram) -> bool {
     // Keep a protective floor against Rust/game OOM aborts without starving
     // bindless world textures or one-shot ped decoration bakes when steady-state
-    // commit headroom sits in the 1-4 GiB range on 32 GiB hosts.
-    commit >= if bake { 256 * MIB } else { 512 * MIB }
+    // commit headroom sits in the 1-4 GiB range on 32 GiB hosts. A 16 GB PC's
+    // free commit sits lower through the streaming, so there the floor is half
+    // (`crate::low_vram::upload_reserve`): the uploads that matter still go.
+    commit >= crate::low_vram::upload_reserve(ram, bake)
 }
 
-fn has_growth_reserve(commit: u64, bake: bool) -> bool {
+fn has_growth_reserve(commit: u64, bake: bool, ram: Ram) -> bool {
     // Growing a fresh 64 MiB upload block for speculative bindless prefetch
     // requires more headroom than reusing slices already committed inside the
     // staging pool.
-    commit >= if bake { 256 * MIB } else { 1024 * MIB }
+    commit >= crate::low_vram::growth_reserve(ram, bake)
 }
 
 /// Leave commit for game allocations and submissions already in flight while
@@ -76,7 +84,7 @@ pub(crate) fn admit_texture_pass(bake: bool) -> bool {
     if now < RETRY_UPLOAD_AT.load(Ordering::Relaxed) {
         return false;
     }
-    has_upload_reserve(sample_commit(now), bake)
+    has_upload_reserve(sample_commit(now), bake, crate::low_vram::ram())
 }
 
 /// Whether the staging allocator may commit a brand-new OS upload buffer
@@ -87,7 +95,7 @@ pub(crate) fn allow_staging_growth(bake: bool) -> bool {
     if now < RETRY_UPLOAD_AT.load(Ordering::Relaxed) {
         return false;
     }
-    has_growth_reserve(sample_commit(now), bake)
+    has_growth_reserve(sample_commit(now), bake, crate::low_vram::ram())
 }
 
 pub(crate) fn limited_host_ram() -> bool {
@@ -96,10 +104,32 @@ pub(crate) fn limited_host_ram() -> bool {
 }
 
 fn next_pressure(was: bool, physical: u64, commit: u64) -> bool {
+    next_pressure_at(was, physical, commit, pressure_lines(crate::low_vram::ram()))
+}
+
+/// Where pressure starts and ends: the free physical memory and the commit left
+/// to the machine when it is entered, and the two it recovers above.
+fn pressure_lines(ram: Ram) -> (u64, u64, u64, u64) {
+    match ram {
+        // A 16 GB PC keeps two or three gigabytes of physical memory free for
+        // the whole of a session: the title fills the rest and Windows trims
+        // working sets by itself. The 32 GB machines' 3 GiB line therefore sat
+        // under the free memory of a whole run there (2026-11-27 21:31, frame
+        // 1842: 2,719 MiB free against 10,277 MiB of commit, nothing paging),
+        // so the layer was in pressure from the first minute on and its
+        // prefetch and staging stayed at the slowest — which is one of the
+        // ways a world that is streaming in waits for room.
+        Ram::Tight => (2 * GIB, 3584 * MIB, 3 * GIB, 5 * GIB),
+        Ram::Roomy | Ram::Limited => (3 * GIB, 5 * GIB, 4 * GIB, 6 * GIB),
+    }
+}
+
+fn next_pressure_at(was: bool, physical: u64, commit: u64, lines: (u64, u64, u64, u64)) -> bool {
+    let (enter_physical, keep_physical, enter_commit, keep_commit) = lines;
     if was {
-        physical < 5 * GIB || commit < 6 * GIB
+        physical < keep_physical || commit < keep_commit
     } else {
-        physical <= 3 * GIB || commit <= 4 * GIB
+        physical <= enter_physical || commit <= enter_commit
     }
 }
 
@@ -139,11 +169,15 @@ pub(crate) fn pressured() -> bool {
     PRESSURED.load(Ordering::Relaxed)
 }
 
-/// True when OS commit headroom is critically low (< 1.5 GiB) or an allocation
-/// just failed with `E_OUTOFMEMORY`, requiring emergency throttling.
+/// True when OS commit headroom is critically low (< 1.5 GiB), free physical
+/// memory has fallen under [`crate::low_vram::PHYSICAL_FLOOR`] (768 MiB — past
+/// it Windows pages out what is in use, so nothing speculative may take more),
+/// or an allocation just failed with `E_OUTOFMEMORY`: emergency throttling.
 pub(crate) fn critical_commit() -> bool {
     let now = crate::host::coarse_ms();
-    now < RETRY_UPLOAD_AT.load(Ordering::Relaxed) || sample_commit(now) < 1536 * MIB
+    now < RETRY_UPLOAD_AT.load(Ordering::Relaxed)
+        || sample_commit(now) < 1536 * MIB
+        || AVAILABLE_PHYSICAL.load(Ordering::Relaxed) < crate::low_vram::PHYSICAL_FLOOR
 }
 
 /// A soft per-frame admission limit. A single texture can cross it. The
@@ -162,6 +196,11 @@ pub(crate) fn prefetch_limit(bytes: u64, pressure: bool, critical: bool, limited
 mod tests {
     use super::*;
 
+    /// The reserves of the machines this fork was measured on (32 GB and up:
+    /// `Ram::Limited`'s numbers, which `Ram::Roomy` shares), and the halves a
+    /// 16 GB PC keeps instead — its free commit sits lower through the
+    /// streaming, and waiting for the big machines' floor would starve the
+    /// uploads the world needs.
     #[test]
     fn bake_and_lookahead_leave_room_for_live_game_allocations() {
         for (commit, bake, lookahead, growth) in [
@@ -171,20 +210,46 @@ mod tests {
             (768 * MIB, true, true, false),
             (1024 * MIB, true, true, true),
         ] {
-            assert_eq!(has_upload_reserve(commit, true), bake);
-            assert_eq!(has_upload_reserve(commit, false), lookahead);
-            assert_eq!(has_growth_reserve(commit, false), growth);
+            assert_eq!(has_upload_reserve(commit, true, Ram::Limited), bake);
+            assert_eq!(has_upload_reserve(commit, false, Ram::Limited), lookahead);
+            assert_eq!(has_growth_reserve(commit, false, Ram::Limited), growth);
+            // Roomy shares the limited numbers: only the tight tier halves them.
+            assert_eq!(has_upload_reserve(commit, true, Ram::Roomy), bake);
+            assert_eq!(has_growth_reserve(commit, false, Ram::Roomy), growth);
+        }
+        for (commit, bake, lookahead, growth) in [
+            (128 * MIB, true, false, false),
+            (256 * MIB, true, true, false),
+            (512 * MIB, true, true, true),
+            (768 * MIB, true, true, true),
+        ] {
+            assert_eq!(has_upload_reserve(commit, true, Ram::Tight), bake, "{commit}");
+            assert_eq!(has_upload_reserve(commit, false, Ram::Tight), lookahead, "{commit}");
+            assert_eq!(has_growth_reserve(commit, false, Ram::Tight), growth, "{commit}");
         }
     }
 
     #[test]
     fn either_constraint_enters_pressure_and_both_must_recover() {
-        assert!(next_pressure(false, 12 * GIB, 4 * GIB));
-        assert!(next_pressure(false, 3 * GIB, 16 * GIB));
-        assert!(next_pressure(true, 4 * GIB, 7 * GIB));
-        assert!(next_pressure(true, 6 * GIB, 5 * GIB));
-        assert!(!next_pressure(true, 5 * GIB, 6 * GIB));
-        assert!(!next_pressure(false, 4 * GIB, 5 * GIB));
+        let big = pressure_lines(Ram::Limited);
+        assert!(next_pressure_at(false, 12 * GIB, 4 * GIB, big));
+        assert!(next_pressure_at(false, 3 * GIB, 16 * GIB, big));
+        assert!(next_pressure_at(true, 4 * GIB, 7 * GIB, big));
+        assert!(next_pressure_at(true, 6 * GIB, 5 * GIB, big));
+        assert!(!next_pressure_at(true, 5 * GIB, 6 * GIB, big));
+        assert!(!next_pressure_at(false, 4 * GIB, 5 * GIB, big));
+    }
+
+    #[test]
+    fn a_16_gb_pc_is_not_pressured_at_the_memory_it_lives_in() {
+        let tight = pressure_lines(Ram::Tight);
+        // The run of 2026-11-27 21:31, frame 1842, to the megabyte.
+        assert!(!next_pressure_at(false, 2719 * MIB, 10277 * MIB, tight));
+        assert!(next_pressure_at(false, 2048 * MIB, 10277 * MIB, tight));
+        assert!(next_pressure_at(false, 8 * GIB, 3 * GIB, tight));
+        // It does stay in pressure while physical memory recovers to 3.5 GiB.
+        assert!(next_pressure_at(true, 3400 * MIB, 8 * GIB, tight));
+        assert!(!next_pressure_at(true, 3584 * MIB, 8 * GIB, tight));
     }
 
     #[test]

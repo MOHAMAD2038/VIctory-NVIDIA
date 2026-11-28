@@ -147,6 +147,20 @@ const DLSS_MODES: [&str; 5] = ["off", "dlaa", "quality", "balanced", "performanc
 /// start, 0xc0000094, a division by zero in the title, 2026-11-28).
 const S_SIZES: [(&str, &str); 4] = [("1080", "dlaa"), ("720", "quality"), ("626", "balanced"), ("540", "performance")];
 
+/// What a small PC plays at (`--low`, and a PC of 18 GB of RAM or less by
+/// itself): the scene at 1080p, upscaled by DLSS performance (1280x720
+/// rendered behind a 2560x1440 picture) or, without NVIDIA's files, by the
+/// title; 30 frames a second, the rate the title itself asks for; frame
+/// generation off, which needs an RTX 40 or later and 1.5 to 2 GB of the
+/// card.
+const LOW_RES: &str = "1080to1440";
+const LOW_DLSS: &str = "performance";
+const LOW_FPS: u32 = 30;
+/// What a start plays at without any of that (a PC this fork was measured
+/// on): the Series X profile at 2560x1440, DLSS quality.
+const USUAL_RES: &str = "1440";
+const USUAL_DLSS: &str = "quality";
+
 #[derive(clap::Args, Clone, Debug)]
 pub(crate) struct Play {
     /// The title's executable. Without it: `game_scarlett_master.exe` beside
@@ -156,12 +170,14 @@ pub(crate) struct Play {
     #[arg(long)]
     series_s: bool,
     /// 1440: output and scene 2560x1440; 1080to1440: scene 1920x1080
-    /// upscaled by the title; 4k: the stock 3840x2160 output.
-    #[arg(long, default_value = "1440", value_parser = RESOLUTIONS)]
-    res: String,
+    /// upscaled by the title; 4k: the stock 3840x2160 output. Without it:
+    /// 1440, or 1080to1440 with the small PC's profile.
+    #[arg(long, value_parser = RESOLUTIONS)]
+    res: Option<String>,
     /// DLSS in place of the title's upscaling (needs NVIDIA's files).
-    #[arg(long, default_value = "quality", value_parser = DLSS_MODES)]
-    dlss: String,
+    /// Without it: quality, or performance with the small PC's profile.
+    #[arg(long, value_parser = DLSS_MODES)]
+    dlss: Option<String>,
     /// DLSS frame generation on from the start: frames shown for each one
     /// rendered, 2 to 6. Without it, it is off (see `--framegen-ready`).
     #[arg(long, value_parser = clap::value_parser!(u32).range(2..=6))]
@@ -181,9 +197,15 @@ pub(crate) struct Play {
     /// `fidelityfx` folder beside this program) and, on Series X, DLSS.
     #[arg(long, default_value = "auto", value_parser = FG_TYPES)]
     fg_type: String,
+    /// The small PC's profile: the scene at 1080p upscaled, DLSS performance,
+    /// 30 frames a second, no frame generation. Taken by itself on a PC of
+    /// 18 GB of RAM or less.
+    #[arg(long)]
+    low: bool,
     /// Frames a second at most (30: the title's own rate; 1000: no cap).
-    #[arg(long, default_value_t = 1000, value_parser = clap::value_parser!(u32).range(1..=1000))]
-    fps: u32,
+    /// Without it, 1000, or 30 with the small PC's profile.
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..=1000))]
+    fps: Option<u32>,
     /// Add or override a switch, as often as needed: `--set VICTORY_X=1`.
     #[arg(long = "set", value_name = "NAME=VALUE")]
     more: Vec<String>,
@@ -284,49 +306,112 @@ fn parse_menu(text: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// The setting a start uses: what was asked for outright, else what the menu
+/// saved, else the profile's (when it is on), else the usual one. Given
+/// outright, the profile holds over the menu, which a `--low` asked for.
+fn choose<'a>(
+    explicit: Option<&'a str>,
+    saved: Option<&'a str>,
+    profile: &'a str,
+    usual: &'a str,
+    low: bool,
+    forced: bool,
+) -> String {
+    let saved = if forced { None } else { saved };
+    explicit.or(saved).unwrap_or(if low { profile } else { usual }).to_owned()
+}
+
+/// Whether this start plays the small PC's profile: `--low`, or a PC of 18 GB
+/// of RAM or less by itself.
+fn low_profile(o: &Play) -> bool {
+    o.low || auto_low()
+}
+
+/// [`low_profile`]'s question about the PC alone. In the tests: never, so
+/// their expectations do not depend on the machine they run on.
+fn auto_low() -> bool {
+    !cfg!(test) && victory_hle::low_vram::small_pc()
+}
+
 /// The settings of a start and whether it is the Series S profile: the
 /// options, what the menu saved over them (`menu`), `--set` over both.
 /// `streamline`: the folder with NVIDIA's files, if there is one.
 fn settings(o: &Play, menu: &[(String, String)], streamline: Option<&Path>) -> (BTreeMap<String, String>, bool) {
     let saved = |k: &str| menu.iter().rev().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+    // `--low`, and by itself on a 16 GB PC: the profile of a small one. Given
+    // outright its choices hold over the menu's (as `-Low` in the script);
+    // taken by itself, what the menu saved stands — it is the player's word
+    // about the PC they are on — and only what it does not name is the
+    // profile's.
+    let low = low_profile(o);
     let series_s = saved("VICTORY_MENU_CONSOLE").map_or(o.series_s, |c| c == "series-s");
-    let res = saved("VICTORY_MENU_RES").filter(|r| RESOLUTIONS.contains(r)).unwrap_or(&o.res);
-    let mut dlss = saved("VICTORY_MENU_DLSS").filter(|d| DLSS_MODES.contains(d)).unwrap_or(&o.dlss);
+    let res = choose(
+        o.res.as_deref(),
+        saved("VICTORY_MENU_RES").filter(|r| RESOLUTIONS.contains(r)),
+        LOW_RES,
+        USUAL_RES,
+        low,
+        o.low,
+    );
+    let dlss = choose(
+        o.dlss.as_deref(),
+        saved("VICTORY_MENU_DLSS").filter(|d| DLSS_MODES.contains(d)),
+        LOW_DLSS,
+        USUAL_DLSS,
+        low,
+        o.low,
+    );
     // Series S picture: the scene's size, which with DLSS on is its mode (the menu keeps the
     // two matched); not saved yet, it is the DLSS mode's.
     let s_res = saved("VICTORY_MENU_S_RES")
         .and_then(|r| S_SIZES.iter().find(|(h, _)| *h == r))
         .or_else(|| S_SIZES.iter().find(|(_, m)| *m == dlss))
         .map_or("720", |(h, _)| *h);
-    if series_s
-        && dlss != "off"
-        && let Some((_, mode)) = S_SIZES.iter().find(|(h, _)| *h == s_res)
-    {
-        dlss = *mode;
-    }
+    // A mode this fork's Series S picture does not have (`--low`'s DLSS performance at 540, which
+    // stopped the title's own upscaling) leaves the size's mode: the sizes and the modes stay
+    // matched, as the menu keeps them.
+    let dlss = match S_SIZES.iter().find(|(h, _)| *h == s_res) {
+        Some((_, mode)) if series_s && dlss != "off" => *mode,
+        _ => dlss.as_str(),
+    };
     // 0: off; 2 to 6: that many frames shown for each one rendered (1, from an older file: 2).
-    let (mut framegen, mut times) = (o.framegen.is_some(), o.framegen.unwrap_or(2));
-    if let Some(saved) = saved("VICTORY_MENU_FRAMEGEN") {
+    // (Ready but off only when asked for: upstream 8fc2254, `-FrameGenReady`. Off, and not made ready, it
+    // holds nothing back; ready, Streamline's swap chain kept a PC at 14 frames a second.)
+    let (mut framegen, mut times, mut ready) = (o.framegen.is_some(), o.framegen.unwrap_or(2), o.framegen_ready && !o.no_framegen_ready);
+    if let Some(saved) = saved("VICTORY_MENU_FRAMEGEN").filter(|_| !o.low) {
         let n = saved.parse::<u32>().ok().filter(|n| (1..=6).contains(n));
         framegen = n.is_some();
         if let Some(n) = n.filter(|n| *n >= 2) {
             times = n;
         }
     }
+    if low && o.framegen.is_none() {
+        // Not even made ready: the memory it holds back is the textures' on a
+        // card of 8 GB or less, and no GTX-class card generates frames at all.
+        framegen = false;
+        ready = false;
+    }
     let fg_type = saved("VICTORY_MENU_FG_TYPE").filter(|t| FG_TYPES.contains(t)).unwrap_or(&o.fg_type);
-    let fps = saved("VICTORY_MENU_FPS")
+    let fps: u32 = saved("VICTORY_MENU_FPS")
+        .filter(|_| !low)
         .and_then(|f| f.parse::<u32>().ok())
         .filter(|f| (1..=1000).contains(f))
-        .unwrap_or(o.fps);
+        .or(o.fps)
+        .unwrap_or(if low { LOW_FPS } else { 1000 });
 
     let mut s: BTreeMap<String, String> = SETTINGS.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())).collect();
     let mut set = |k: &str, v: &str| drop(s.insert(k.to_owned(), v.to_owned()));
     if !series_s {
-        match res {
+        match res.as_str() {
             "1440" => set("VICTORY_NATIVE_1440P", "1"),
             "1080to1440" => set("VICTORY_RENDER_1080P", "1"),
             _ => {}
         }
+    }
+    if o.low {
+        // The layer's own smaller bets, for a PC that is not 16 GB (a 32 GB
+        // one with a 6 GB card, say): `--set VICTORY_LOW_VRAM=0` overrules it.
+        set("VICTORY_LOW_VRAM", "1");
     }
     let (mut dlss_on, mut framegen_x) = (false, None);
     if dlss != "off"
@@ -334,11 +419,11 @@ fn settings(o: &Play, menu: &[(String, String)], streamline: Option<&Path>) -> (
     {
         dlss_on = true;
         set("VICTORY_DLSS", "1");
-        set("VICTORY_DLSS_MODE", dlss);
+        set("VICTORY_DLSS_MODE", &dlss);
         set("VICTORY_STREAMLINE_DIR", &dir.to_string_lossy());
         if framegen {
             framegen_x = Some(times);
-        } else if o.framegen_ready && !o.no_framegen_ready {
+        } else if ready {
             framegen_x = Some(0); // ready, off
         }
         if let Some(x) = framegen_x {
@@ -353,10 +438,11 @@ fn settings(o: &Play, menu: &[(String, String)], streamline: Option<&Path>) -> (
     // AMD FSR 3 frame generation, made ready as DLSS frame generation is: auto, the layer uses
     // it only where DLSS frame generation does not run; fsr, DLSS frame generation is not asked.
     // The layer checks the files and the card and says at the start what runs and why not.
-    // Only with DLSS on: it never runs without DLSS's upscaling, and made ready without it (the
-    // title's FidelityFX then left with AMD's files) the title stopped during the boot screens
-    // (0x80000003 at +0x2219650, or exit code 3; #331, #459: --no-framegen-ready avoided it).
-    if dlss_on && fg_type != "dlss" && (framegen || o.framegen_ready && !o.no_framegen_ready) {
+    // Only with DLSS on: it never runs without DLSS's upscaling (the title's FidelityFX then left
+    // with AMD's files, the title stopped during the boot screens: 0x80000003 at +0x2219650, or
+    // exit code 3; #331, #459). `ready` is `-FrameGenReady`: off unless asked for (upstream
+    // 8fc2254), as for DLSS frame generation above.
+    if dlss_on && fg_type != "dlss" && (framegen || ready) {
         set("VICTORY_FSR_FRAMEGEN", "1");
         if fg_type == "fsr" {
             s.remove("VICTORY_FRAMEGEN");
@@ -383,7 +469,7 @@ fn settings(o: &Play, menu: &[(String, String)], streamline: Option<&Path>) -> (
     // For the menu: what it shows as the current choices.
     let mut set = |k: &str, v: &str| drop(s.insert(k.to_owned(), v.to_owned()));
     set("VICTORY_MENU_CONSOLE", if series_s { "series-s" } else { "series-x" });
-    set("VICTORY_MENU_RES", res);
+    set("VICTORY_MENU_RES", &res);
     set("VICTORY_MENU_S_RES", if dlss_on { s_res } else { "720" });
     set("VICTORY_MENU_DLSS", if dlss_on { dlss } else { "off" });
     set("VICTORY_MENU_FRAMEGEN", &framegen_x.unwrap_or(0).to_string());
@@ -851,12 +937,28 @@ pub(crate) fn prepare(o: &Play) -> Result<Ready> {
     std::fs::create_dir_all(&home).with_context(|| format!("creating {}", home.display()))?;
     let menu_file = home.join("victory-settings.txt");
     let menu = parse_menu(&std::fs::read_to_string(&menu_file).unwrap_or_default());
-    let picked = menu.iter().rev().find(|(k, _)| k == "VICTORY_MENU_DLSS").map(|(_, v)| v.as_str());
-    if picked.unwrap_or(o.dlss.as_str()) != "off" && streamline_dir(&here).is_none() {
-        offer_dlss(picked.is_some_and(|d| DLSS_MODES.contains(&d)));
+    // (What the menu saved, by name, as `settings` reads it.)
+    let saved = |k: &str| menu.iter().rev().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+    let low = low_profile(o);
+    let wants_dlss = o
+        .dlss
+        .as_deref()
+        .or(saved("VICTORY_MENU_DLSS"))
+        .unwrap_or(if low { LOW_DLSS } else { USUAL_DLSS })
+        != "off";
+    if wants_dlss && streamline_dir(&here).is_none() {
+        offer_dlss(saved("VICTORY_MENU_DLSS").is_some_and(|d| DLSS_MODES.contains(&d)));
     }
     let streamline = streamline_dir(&here);
     let (mut s, series_s) = settings(o, &menu, streamline.as_deref());
+    if low_profile(o) {
+        println!(
+            "Small PC ({}): the scene at 1080p upscaled (DLSS performance where NVIDIA's files are there), \
+             30 frames a second, no frame generation.",
+            if o.low { "--low" } else { "16 GB of RAM" }
+        );
+        println!("`--set VICTORY_X=...` overrules any of it; `victory play --res 1440` takes the profile's picture size back.");
+    }
     // FSR 3 made ready: AMD's files, asked for only where they would be used (FSR 3 chosen,
     // or a card without DLSS Frame Generation).
     if s.contains_key("VICTORY_FSR_FRAMEGEN") {
@@ -984,13 +1086,14 @@ mod tests {
         Play {
             exe: None,
             series_s: false,
-            res: "1440".to_owned(),
-            dlss: "quality".to_owned(),
+            res: None,
+            dlss: None,
             framegen: None,
             framegen_ready: false,
             no_framegen_ready: false,
             fg_type: "auto".to_owned(),
-            fps: 1000,
+            low: false,
+            fps: None,
             more: Vec::new(),
             preload: false,
         }
@@ -1157,7 +1260,8 @@ mod tests {
     #[test]
     fn options_and_set_are_applied() {
         let mut o = options();
-        (o.res, o.dlss, o.framegen, o.fps) = ("1080to1440".to_owned(), "off".to_owned(), Some(4), 30);
+        (o.res, o.dlss, o.framegen, o.fps) =
+            (Some("1080to1440".to_owned()), Some("off".to_owned()), Some(4), Some(30));
         o.more = vec!["VICTORY_AMBIENT=0".to_owned(), "VICTORY_NEW = 2".to_owned()];
         let (s, _) = settings(&o, &[], Some(Path::new("x")));
         let get = |k: &str| s.get(k).map(String::as_str);
@@ -1166,6 +1270,48 @@ mod tests {
         assert_eq!((get("VICTORY_DLSS"), get("VICTORY_FRAMEGEN")), (None, None));
         assert_eq!(get("VICTORY_FRAME_INTERVAL_US"), Some("33333"));
         assert_eq!((get("VICTORY_AMBIENT"), get("VICTORY_NEW")), (Some("0"), Some("2")));
+    }
+
+    /// A 16 GB PC, or `--low`: 1080p in, upscaled, 30 a second, and no frame
+    /// generation even made ready (it needs an RTX 40 or later, and its 1.5 to
+    /// 2 GB of the card are the textures' on a card of 8 GB).
+    #[test]
+    fn the_small_pcs_profile_is_1080p_at_thirty_without_frame_generation() {
+        let dir = Path::new(r"C:\nvidia");
+        let low = |o: Play| settings(&o, &[], Some(dir)).0;
+        let s = low(Play { low: true, ..options() });
+        let get = |k: &str| s.get(k).map(String::as_str);
+        assert_eq!((get("VICTORY_RENDER_1080P"), get("VICTORY_NATIVE_1440P")), (Some("1"), None));
+        assert_eq!((get("VICTORY_DLSS"), get("VICTORY_DLSS_MODE")), (Some("1"), Some("performance")));
+        assert_eq!(get("VICTORY_FRAME_INTERVAL_US"), Some("33333"));
+        // Ready but off was 86 % of the budget held back for it, and the
+        // profile leaves the card's own headroom in charge instead.
+        assert_eq!((get("VICTORY_FRAMEGEN"), get("VICTORY_FRAMEGEN_X")), (None, None));
+        assert_eq!(get("VICTORY_TEXTURE_ROOM_PERCENT"), None);
+        assert_eq!(get("VICTORY_LOW_VRAM"), Some("1"));
+        assert_eq!((get("VICTORY_MENU_FPS"), get("VICTORY_MENU_DLSS")), (Some("30"), Some("performance")));
+        // Without NVIDIA's files the title's own upscaling takes the 1080p scene.
+        let (s, _) = settings(&Play { low: true, ..options() }, &[], None);
+        assert_eq!(s.get("VICTORY_RENDER_1080P").map(String::as_str), Some("1"));
+        assert_eq!(s.get("VICTORY_FRAME_INTERVAL_US").map(String::as_str), Some("33333"));
+        // `--low` holds over what the menu saved, and `--fps` over the profile.
+        let menu = parse_menu(
+            "VICTORY_MENU_DLSS=quality\r\nVICTORY_MENU_RES=1440\r\nVICTORY_MENU_FRAMEGEN=0\r\nVICTORY_MENU_FPS=60\r\n",
+        );
+        let s = settings(&Play { low: true, ..options() }, &menu, Some(dir)).0;
+        let get = |k: &str| s.get(k).map(String::as_str);
+        assert_eq!((get("VICTORY_RENDER_1080P"), get("VICTORY_NATIVE_1440P")), (Some("1"), None));
+        assert_eq!(get("VICTORY_DLSS_MODE"), Some("performance"));
+        assert_eq!((get("VICTORY_FRAMEGEN"), get("VICTORY_FRAMEGEN_X")), (None, None));
+        assert_eq!(get("VICTORY_FRAME_INTERVAL_US"), Some("33333"));
+        let s = settings(&Play { low: true, fps: Some(40), ..options() }, &menu, Some(dir)).0;
+        assert_eq!(s.get("VICTORY_FRAME_INTERVAL_US").map(String::as_str), Some("25000"));
+        // A plain start on this PC is unchanged, and `--low` is the only way
+        // the profile is taken (never in the tests).
+        assert!(!auto_low());
+        let s = settings(&options(), &[], Some(dir)).0;
+        assert_eq!(s.get("VICTORY_FRAME_INTERVAL_US").map(String::as_str), Some("1000"));
+        assert!(!s.contains_key("VICTORY_LOW_VRAM"));
     }
 
     /// AMD's files are offered only to cards without DLSS Frame Generation (or FSR 3 chosen).

@@ -6,6 +6,7 @@
 #   .\scripts\play-foxhound.ps1 -Exe ... -Dlss balanced -FrameGen
 #   .\scripts\play-foxhound.ps1 -Exe ... -SeriesS             Series S profile (1280x720 inside, faster, softer)
 #   .\scripts\play-foxhound.ps1 -Exe ... -Lite                small-card preset (1080p scene, VRAM headroom, fewer artifacts)
+#   .\scripts\play-foxhound.ps1 -Exe ... -Low                 16 GB PC preset (1080p scene upscaled, 30 fps, no FrameGen)
 #   .\scripts\play-foxhound.ps1 -Exe ... -Build diag          diagnostics build (slower; captures, timelines)
 #   .\scripts\play-foxhound.ps1 -Exe ... -More @{VICTORY_AMBIENT_SPECULAR='0'}   add or override switches
 #
@@ -23,6 +24,11 @@ param(
     # DLSS/FrameGen, absolute VRAM headroom, and the torn-piece checker (fewer artifacts). It stands
     # over a saved F1 menu; -More still overrides any of it. Run `victory warm --used` once first.
     [switch]$Lite,
+    # -Low: a 16 GB PC's profile: the scene at 1080p upscaled, DLSS performance where NVIDIA's files are,
+    # 30 frames a second, no frame generation, and the layer's smaller memory bets (VICTORY_LOW_VRAM=1).
+    # Taken by itself on a PC of 18 GB of RAM or less. It stands over a saved F1 menu, over -Lite, and
+    # -More still overrides any of it.
+    [switch]$Low,
     # 1440: output and scene 2560x1440 (Series X, the image is patched); 1080to1440: scene 1920x1080 upscaled by
     # the title; 4k: the stock Series X output (3840x2160).
     [ValidateSet('1440', '1080to1440', '4k')][string]$Res = '1440',
@@ -78,6 +84,13 @@ if ($menu['VICTORY_MENU_FG_TYPE'] -in 'auto', 'dlss', 'fsr') { $FgType = $menu['
 if ($menu['VICTORY_MENU_FPS'] -match '^\d+$' -and [int]$menu['VICTORY_MENU_FPS'] -ge 1 -and [int]$menu['VICTORY_MENU_FPS'] -le 1000) { $fpsWanted = [int]$menu['VICTORY_MENU_FPS'] }
 # -Lite forces the light picture choices even over a saved menu (a stale 1440p/FrameGen entry must not win).
 if ($Lite) { $Res = '1080to1440'; $Dlss = 'off'; $FrameGen = $false }
+# -Low the same, and by itself on a 16 GB PC (18 GB or less of physical memory): 1080p upscaled by DLSS
+# performance, 30 a second, no frame generation (RTX 40 or later only, and 1.5 to 2 GB of the card).
+if (-not $Low) {
+    $ram = (Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).TotalPhysicalMemory
+    if ($ram -and $ram -le 18GB) { $Low = $true }
+}
+if ($Low) { $Res = '1080to1440'; $Dlss = 'performance'; $FrameGen = $false; $NoFrameGenReady = $true; $fpsWanted = 30 }
 $settings = @{
     # Submission and copy machinery
     VICTORY_THIN = '1'; VICTORY_JOIN_PARTS = '8'; VICTORY_RELAY = '2'; VICTORY_RELAY_COPY = '1'; VICTORY_WIDE_BACK = '1'
@@ -164,6 +177,21 @@ if ($Lite) {
     # look stale in a new area, turn it off: -More @{VICTORY_FILL_TITLE='0'}.
     $settings.VICTORY_FILL_TITLE = '1'
 }
+# -Low: the same choices again after the saved menu, which must not win back 1440p or a frame to generate.
+if ($Low) {
+    if (-not $SeriesS) { $settings.Remove('VICTORY_NATIVE_1440P'); $settings.VICTORY_RENDER_1080P = '1' }
+    foreach ($k in 'VICTORY_TEXTURE_ROOM_PERCENT','VICTORY_FRAMEGEN','VICTORY_FRAMEGEN_X') { $settings.Remove($k) }
+    if ($settings.ContainsKey('VICTORY_STREAMLINE_DIR')) { $settings.VICTORY_DLSS = '1'; $settings.VICTORY_DLSS_MODE = 'performance' }
+    # The layer's own smaller bets on 16 GB (the code's defaults, set here so that a stale saved switch
+    # cannot undo them): smaller upload reserves, fewer threads, less held between frames.
+    $settings.VICTORY_LOW_VRAM = '1'
+    # What -Lite keeps of a small card: absolute VRAM headroom, and tidy copies.
+    $settings.VICTORY_TEXTURE_HEADROOM_MB = '1024'
+    $settings.VICTORY_CARD_ROOM_FOR_TARGETS_MB = '1024'
+    $settings.VICTORY_CARD_BUFFERS_MIN_KB = '1024'
+    $settings.VICTORY_FETCH_CHECK = '1'
+    $settings.VICTORY_FILL_TITLE = '1'
+}
 foreach ($k in $More.Keys) { $settings[$k] = $More[$k] }
 $console = if ($SeriesS) { 'series-s' } else { 'series-x' }
 # For the menu: what it shows as the current choices, where it saves, and how it starts the game again
@@ -176,7 +204,7 @@ $settings.VICTORY_MENU_FG_TYPE = $FgType
 $settings.VICTORY_MENU_FPS = [string]$fpsWanted
 $settings.VICTORY_MENU_FILE = $menuFile
 $settings.VICTORY_MENU_PLAY = $MyInvocation.MyCommand.Path
-$settings.VICTORY_MENU_ARGS = "-Exe '$($Exe -replace "'", "''")' -Build $Build$(if ($FrameGenReady -and -not $NoFrameGenReady) { ' -FrameGenReady' })$(if ($Lite) { ' -Lite' })"
+$settings.VICTORY_MENU_ARGS = "-Exe '$($Exe -replace "'", "''")' -Build $Build$(if ($FrameGenReady -and -not $NoFrameGenReady) { ' -FrameGenReady' })$(if ($Lite) { ' -Lite' })$(if ($Low) { ' -Low' })"
 
 $victory = Join-Path $repo "target\$Build\victory.exe"
 if (-not (Test-Path $victory)) {

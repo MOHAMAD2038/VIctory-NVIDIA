@@ -110,6 +110,56 @@ each commit naming its source. In short:
   constant buffer bookkeeping (romainhedouin).
 - ZJOU: render targets not set again; some shader corrections are being looked at.
 
+# A 16 GB laptop (RTX 4050, 2026-11-27): where it stops
+
+One PC: 16 GB, RTX 4050 Laptop (a budget of 5,152 MB), 16 logical processors, Windows 11,
+2560x1440, `-Low`. Four runs: the first cold, then with the host pipeline library (88,567
+pipelines known, 20 MB loaded), then `-Low -SeriesS`, then `VICTORY_THIN_THREADS=12`.
+
+What holds: 30 fps from the first second to about frame 1,500 cold and frame 2,000 with the
+library loaded — the opening, and it is the launcher's profile doing that, not luck. What does
+not: the city, 5 to 7 fps, the same in every run.
+
+Of a 135-190 ms frame there:
+
+- **The submitting thread: 98-124 ms**, of which 50-57 ms in the lists' steps. It is one
+  thread, and it is the wall (this doc's "what is next", 1).
+- **The card: 63-78 % busy, 105-120 ms a frame.**
+- List calls translated: 25,000-30,500 a frame, 570 ms of processor time on 8 threads
+  (~71 ms of wall) and the same 573 ms on 12 (~48 ms): the translation is no longer the wall
+  once it has threads to spare.
+
+Why the card cannot be the pixels: `-SeriesS` renders 640x360, sixteen times fewer pixels than
+`-Low`'s 1280x720, and the card's time is unchanged (105-120 ms), as is the translation
+(573 against 575 ms). The cost is per command: `graphics_table` 2,137-3,668 a frame,
+`compute_table` 2,029-2,637, `execute_indirect` 1,717-2,241, `set_pipeline` 1,406-2,076,
+the two views and two constants families about 1,000 each — ~4,300 draws and indirect
+executions and ~25,000 state sets a frame.
+
+Measured and not worth it, on that PC:
+
+- **Leaving out repeated calls** (`VICTORY_THIN_KINDS`' count of them): **one** call a frame
+  says the same as the one before it, of 30,000. The title does not repeat itself.
+- **Any one hot method**: the most frequent is 7 % of the calls. There is nothing to special-case.
+- **More translating threads** (8 against 12 of the 16): the same 573 ms of work, the deep
+  city 7.1 against 7.4 fps (within noise). It does help before the city: 30 fps held from
+  frame 1,500 to 2,000, and frames 2,000-2,200 averaged 24.6 fps where the 8-thread run was
+  already at 4.
+- **The smaller picture** (`-SeriesS`): no gain at all, and a softer picture.
+
+What was worth it, and is in the layer now:
+
+- The tight tier's own memory lines: pressure began at 1,919 MiB and 1,519 MiB of free
+  physical memory in two runs and 499 MiB in the third, never in the first minute as the
+  32 GB machines' 3 GiB line did (2026-11-27 21:31, `host memory pressure` at frame 1,842 and
+  no `cleared` line after it).
+- `victory preload`: the in-run compile wave is gone, 30 fps from the first second, and the
+  card's line is reached later (frame 1,659 and 2,213 against 1,842).
+
+What is left is the two walls of the first list, and both are core work: what one submission
+does spread over more than one thread, and the cost of a call itself (19 us a call here,
+3.5 us on the 24-thread PC).
+
 # What was learned on an RTX 5070 Ti Laptop (2026-11-27 to 2026-11-28)
 
 One PC: i9-14900HX, 32 GB, RTX 5070 Ti Laptop 12 GB, Windows 11 26100, Series X profile

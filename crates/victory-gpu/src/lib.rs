@@ -72,6 +72,10 @@ pub mod queue;
 pub mod replay;
 #[cfg(windows)]
 mod residency;
+/// The plan for PCs below this fork's usual size (16 GB of RAM, a card of
+/// 9 GB or less): the tiers and the smaller bets. `small_pc` is the front
+/// end's own question; the rest is for the layer.
+pub mod low_vram;
 pub mod resource;
 pub mod save_share;
 pub mod root;

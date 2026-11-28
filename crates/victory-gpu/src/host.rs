@@ -2238,9 +2238,8 @@ const SCRATCH_CHUNK: u64 = 4 << 20;
 /// lists put a few constants or a rectangle's corners there, and every
 /// list that did took 4 MiB of the PC's memory for it.
 const SCRATCH_FIRST: u64 = 256 << 10;
-/// The most bytes of chunks kept while no list holds them.
-const SPARE_MOST: u64 = 128 << 20;
-/// The same with [`keep_freed`].
+/// The same with [`keep_freed`]; without it, or on a PC of 32 GiB or less,
+/// [`crate::low_vram::scratch_spare`] (128 MiB, 64 on 16 GB).
 const SPARE_KEPT: u64 = 1 << 30;
 
 /// Whether lists share their scratch chunks: a list takes a chunk when it
@@ -2333,8 +2332,8 @@ fn take_chunk(host: &Host, size: u64) -> Option<Chunk> {
 }
 
 /// A list is done with `chunks` (it was reset after its submissions ran,
-/// or dropped): kept for the next list, or freed past [`SPARE_MOST`] and
-/// without the pool.
+/// or dropped): kept for the next list, or freed past
+/// [`SPARE_KEPT`] / [`crate::low_vram::scratch_spare`] and without the pool.
 fn give_chunks(chunks: Vec<(Chunk, u64)>) {
     if chunks.is_empty() {
         return;
@@ -2347,7 +2346,7 @@ fn give_chunks(chunks: Vec<(Chunk, u64)>) {
                 let limit = if keep_freed() && !crate::residency::limited_host_ram() {
                     SPARE_KEPT
                 } else {
-                    SPARE_MOST
+                    crate::low_vram::scratch_spare(crate::low_vram::ram())
                 };
                 spare.give(chunk, size, limit)
             } else {

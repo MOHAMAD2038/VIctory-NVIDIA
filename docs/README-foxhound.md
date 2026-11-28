@@ -38,7 +38,8 @@ What is known to be wrong:
 
 ## What you need
 
-- Windows 10 or 11 (x64), a CPU with AVX2, 32 GB of RAM or more, an SSD.
+- Windows 10 or 11 (x64), a CPU with AVX2, 16 GB of RAM or more, an SSD. 32 GB is what the numbers in *Where it
+  stands* were measured on; 16 GB takes the smaller profile in *On 16 GB of RAM* below, by itself.
 - An NVIDIA GeForce RTX GPU with a recent driver for DLSS (RTX 40 or later for Frame Generation, with
   hardware-accelerated GPU scheduling on). Any Direct3D 12 GPU with shader model 6.6 and mesh shaders runs the
   layer without DLSS.
@@ -103,6 +104,7 @@ The diagnostics build (frame timelines, captures, GPU timing) is optional:
 | `-FrameGen` | DLSS Frame Generation (about +1.4 GB of VRAM) |
 | `-SeriesS` | the Series S profile: 1280x720 inside, faster, softer |
 | `-Res 1080to1440` / `4k` | scene at 1080p upscaled by the title / the stock 3840x2160 output |
+| `-Low` | the 16 GB profile (`victory play --low`): 1080p scene upscaled, DLSS performance, 30 fps, no Frame Generation; taken by itself on a PC of 18 GB of RAM or less |
 | `-Build diag` | the diagnostics build |
 | `-More @{VICTORY_X='1'}` | add or override any switch |
 
@@ -111,17 +113,65 @@ monitor the game is on).
 
 Logs go to `%LOCALAPPDATA%\victory\logs`, saves to `%LOCALAPPDATA%\victory\data`. Close the game window to quit.
 
+### On 16 GB of RAM, and a card of 8 GB or less
+
+What the layer keeps "because it will be used again soon" — 64 MiB upload blocks made ahead, spare list scratch,
+snapshot buffers for the memory compares, host copies — is free on a 32 or 64 GB machine and decides on 16 GB
+between a frame that runs and one that waits for the disk. Two things changed for it:
+
+- **The layer reads the PC and the card itself.** On 18 GB of RAM or less it takes the smaller bet by itself:
+  half the upload reserves (256 MiB to start an upload, 128 for a one-shot bake, 512 to grow a block, against
+  512 / 256 / 1024), half the snapshot buffers, half the staging blocks, a quarter of the card's empty texture
+  blocks, 64 MiB of spare list scratch instead of 128, four threads for the bytes under flights' writes instead
+  of six, four less than the PC's processors (at most twelve) translating lists, half the pipeline workers, and nothing
+  speculative staged once free physical memory is under 768 MiB. A card whose budget is 9 GiB or less keeps
+  1 GiB of it free for the host's own allocations, where its 90 % line left about 780 MiB on an 8 GB card.
+  It also starts shedding memory later than on a big machine: pressure begins at 2 GiB of free physical memory
+  (recovering above 3.5) instead of 3 (above 5), because a 16 GB PC lives at two or three gigabytes free for the
+  whole of a session — the first measured run sat at 2,719 MiB free against 10,277 MiB of commit, nothing
+  paging, and the big machines' line held the layer in pressure, and its prefetch and staging at their
+  slowest, from the first minute on.
+  `VICTORY_LOW_VRAM=1` / `=0` chooses the tier outright; the numbers are in `crates/victory-gpu/src/low_vram.rs`.
+- **`-Low` sets the picture for it**: the scene at 1920x1080 upscaled to 2560x1440 (DLSS performance renders
+  1280x720; without NVIDIA's files the title upscales), 30 frames a second (the interval the title asks for
+  itself), and Frame Generation off and not made ready — it needs RTX 40 or later and 1.5 to 2 GB of the card.
+
+A frame still costs the layer its CPU work (about 33 ms in the opening rooms on the measured PC), so 30 a second
+is the target on a small PC too; what the profile buys is the card's room and the memory. `victory play` prints
+which profile it took, and the F3 panel shows what the run does (frame rate, VRAM, RAM).
+
+Four runs on such a PC (RTX 4050 Laptop, 5,152 MB of card, 16 GB, 2026-11-27) measured where it stops. With the
+pipelines warmed (`preload` below) it holds 30 fps from the first second to about frame 2,000 — the opening. The
+city is 5 to 7 fps, and both of its walls are per command, not per pixel: `-SeriesS` renders sixteen times fewer
+pixels and the card's time and the layer's do not move (105-120 ms and 573 ms), while a frame has ~25,000 state
+sets and ~4,300 draws and indirect executions. Leaving out repeated calls would save one call a frame of 30,000,
+and no single method is more than 7 % of them. The numbers are in `docs/findings.md`; the two things that would
+change it are core work, not switches: spreading one submission's work over more than one thread, and the cost of
+a call itself.
+
+If it does not hold 30, the panel says where the time goes: with the GPU at work most of the frame, the card is
+the limit — `-SeriesS` (1280x720 inside, upscaled) is four times less to draw, and `-Dlss performance` already
+renders 1280x720 behind a 2560x1440 picture; with the GPU mostly idle, the layer's own CPU work is the limit and a
+smaller picture will not help. On an RTX 40 laptop card `-FrameGen` (2x) shows two frames for each one rendered
+if the card has 1.5 to 2 GB to spare, which the F1 menu reports. Send the first lines of the log
+(`%LOCALAPPDATA%\victory\logs`) with the panel's numbers: the tier, the worker counts and the reserves it took
+are written there once at the start.
+
 ### Warming up (once per build or driver)
 
 The first run of a build compiles pipelines while playing and stutters. Runs write down every pipeline the title
 makes (`VICTORY_PIPELINE_BOOK=1`, set by the launcher); afterwards make them all ahead:
 
 ```powershell
-$env:VICTORY_HOST_WAVE = '32'
-target\release\victory.exe warm
+target\release\victory.exe preload
 ```
 
-The NVIDIA driver keeps its compiled pipelines **per program path**: a build run from another folder starts cold.
+`preload` translates every shader, then makes the pipelines the book knows, then stores what the title needs while
+loading in the pipeline library it starts with; stopped, it goes on where it was next time. Over a title folder of
+its own: `preload 'D:\GTA\game folder'`. It is also the F1 menu's **PRELOAD SHADERS**, which has the launcher do it
+before the title starts. By hand, the older way is `warm` (every pipeline the book knows) or `warm --used` (only
+the ones earlier runs drew with first: a few minutes, and it says how many there are before it starts). The NVIDIA
+driver keeps its compiled pipelines **per program path**: a build run from another folder starts cold.
 
 ## Switches worth knowing
 

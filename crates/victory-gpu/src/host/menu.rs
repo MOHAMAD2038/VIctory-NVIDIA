@@ -183,6 +183,9 @@ const ITEMS: &[Item] = &[
     Item { var: "VICTORY_INDIRECT_BATCH", label: "INDIRECT BATCH", values: STAGES, live: false },
     Item { var: "VICTORY_CARD_BUFFERS_MIN_KB", label: "CARD COMPARES FROM (KB)", values: &[("64", "64"), ("1024", "1024")], live: false },
     Item { var: "VICTORY_PORT_CONSTANTS", label: "CONSTANTS HEAP IN PLACE", values: UNSET_ON, live: false },
+    // A 16 GB PC takes it by itself (18 GB or less, read at the start); this
+    // is for the others, and for turning the layer's big-machine numbers back on.
+    Item { var: "VICTORY_LOW_VRAM", label: "LOW MEMORY (16 GB PC)", values: UNSET_ON, live: false },
     // THIN records the title's list calls on our threads. On an RTX 5080 with a 6-core CPU heads did not
     // draw with it and frames were slower (14 a second with it, 21 to 28 without): switches for it and for
     // what goes with it. Frame generation needs the line of submissions: without THIN, ASYNC SUBMIT gives it.

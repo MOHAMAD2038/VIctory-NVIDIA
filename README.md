@@ -71,8 +71,9 @@
   window. Settings, saves, caches, logs and the downloads all go there
   instead of `%LOCALAPPDATA%\victory`. To keep what you have, move that
   folder's contents there first.
-- You need Windows 10 or 11, 32 GB of RAM or more, an SSD and an NVIDIA
-  GeForce RTX card with a recent driver. This repository and its releases
+- You need Windows 10 or 11, 16 GB of RAM or more (32 GB is what the numbers
+  below were measured on), an SSD and an NVIDIA GeForce RTX card with a recent
+  driver. This repository and its releases
   contain no game files.
 - **The first start of each new version restarts by itself once.** A new
   `victory.exe` runs at about 14 fps on its first start, and normally from then
@@ -94,6 +95,10 @@
   add `VICTORY_MFG_UNLOCKER=` to `%LOCALAPPDATA%\victory\victory-settings.txt`).
   FSR 3 frame generation (2x) is the supported way on those cards. A
   `winmm.dll` copy of the mod beside `victory.exe` still works too.
+- Nothing to configure: the program reads the PC's memory and the card's
+  budget itself, and on a PC of 18 GB of RAM or less it takes the smaller
+  profile by itself (1080p scene upscaled, 30 frames a second, no frame
+  generation; `--low` does the same on any PC, and `-Low` in the script).
 
 **In the game**
 
@@ -298,13 +303,14 @@ What is known to be wrong:
 
 ## How to run it
 
-You need Windows 10 or 11 (x64), a CPU with AVX2, 32 GB of RAM or more, an
+You need Windows 10 or 11 (x64), a CPU with AVX2, 16 GB of RAM or more, an
 SSD, an NVIDIA GeForce RTX card with a recent driver (RTX 40 or later for frame
 generation, with hardware-accelerated GPU scheduling on; more than 2x needs an
 RTX 50), [Rust](https://rustup.rs) (the toolchain is pinned), the Visual Studio
 Build Tools with "Desktop development with C++", and **your own dump** of the
 title's Xbox Series build v1.0.2.1 (the folder with
-`game_scarlett_master.exe`).
+`game_scarlett_master.exe`). 16 GB is enough for the smaller profile below; 32
+GB is what the measurements in *Where it stands* were made on.
 
 ```powershell
 git clone https://github.com/trustno1-coder/VIctory-NVIDIA
@@ -331,8 +337,9 @@ fork has always had; its options:
 | `-FrameGen`, `-FrameGenX 4` | frame generation on from the start, 2 to 6 frames shown for each one rendered |
 | `-Dlss off` / `dlaa` / `balanced` / `performance` | the title's own upscaling, or another DLSS mode |
 | `-Fps 60` | a frame rate cap (30 is the title's own) |
-| `-SeriesS` | the Series S profile: 1280x720 inside, faster, softer |
+| `-Low` | the 16 GB profile: the scene at 1080p upscaled, DLSS performance, 30 frames a second, no frame generation; taken by itself on a PC of 18 GB of RAM or less |
 | `-Lite` | the small-card preset (around 6 to 8 GB of VRAM): 1080p scene upscaled by the title, no DLSS or frame generation, `VICTORY_TEXTURE_HEADROOM_MB=1024` so a gigabyte of the card stays free, a smaller render-target reserve, small buffers kept in RAM, the torn-copy check on. It stands over a saved `victory-settings.txt`; `-More` still overrides any of it. Run `victory warm --used` once first |
+| `-SeriesS` | the Series S profile: 1280x720 inside, faster, softer |
 | `-Res 1080to1440` / `4k` | scene at 1080p upscaled by the title / the stock 3840x2160 output |
 | `-FrameGenReady` | frame generation made ready but off, so the F1 menu can switch it while playing (costs frame rate: ready, frames go through Streamline's swap chain; without it, a change in F1 takes effect at the next start) |
 | `-FgType auto` / `dlss` / `fsr` | which frame generation (see the top of this page); FSR 3's DLLs from `VICTORY_FIDELITYFX_DIR`, else `amd-sdk\FidelityFX\bin` here |
@@ -340,9 +347,40 @@ fork has always had; its options:
 | `-More @{VICTORY_X='1'}` | add or override any switch |
 
 What the F1 menu saved (`victory-settings.txt`) goes over these at every start;
-delete that file to go back to them. Full screen: start the game, then run
+delete that file to go back to them (`-Lite` and `-Low` stand over it). Full screen: start the game, then run
 `.\scripts\fullscreen.ps1` in another window. Logs go to
 `%LOCALAPPDATA%\victory\logs`, saves to `%LOCALAPPDATA%\victory\data`.
+
+### On 16 GB of RAM, and a card of 8 GB or less
+
+Everything here was built and measured on 32 to 64 GB machines with 12 to 24 GB
+cards, and it used to assume as much. What such a layer keeps "because it will
+be used again soon" — 64 MiB blocks of upload memory made ahead, spare scratch
+chunks, snapshot buffers for the memory compares, host copies of textures — is
+free on 64 GB, and on 16 GB decides between a frame that runs and one that
+waits for the disk while Windows pages. Two things changed:
+
+- **The layer reads the PC and the card itself** (18 GB of RAM or less, a card
+  budget of 9 GiB or less) and takes the smaller bet on its own: half the
+  upload reserves (256 MiB to start an upload, 128 for a one-shot bake, 512 to
+  grow a block), half the snapshot buffers, half the staging blocks, a quarter
+  of the card's empty texture blocks, 1 GiB of a small card kept free rather
+  than the 780 MiB its 90 % line left, fewer threads translating and copying
+  lists, and nothing speculative staged once free physical memory is under
+  768 MiB. `VICTORY_LOW_VRAM=1`/`=0` says which tier to take, whatever the PC
+  has; every number is in `crates/victory-gpu/src/low_vram.rs`.
+- **`-Low` (or `victory play --low`) sets the picture for it**: the scene at
+  1920x1080 upscaled to 2560x1440 (DLSS performance renders 1280x720; without
+  NVIDIA's files the title's own upscaler does it), 30 frames a second — the
+  interval the title asks for itself — and frame generation off and not made
+  ready, since it needs an RTX 40 or later and 1.5 to 2 GB of the card.
+
+A frame still costs the layer the same CPU work it costs on a big machine
+(about 33 ms in the opening rooms), so 30 a second is the target on a small PC
+too: what the profile buys is the card's headroom and the memory, not a shorter
+frame. Nothing here has been measured on a 16 GB laptop yet — the numbers in
+*Where it stands* are the 32 GB PC's. The F3 panel shows what a run actually
+does (frame rate, VRAM, RAM); `docs/README-foxhound.md` has the switches.
 
 If the menu works but loading a scene closes the game, see the
 [Windows memory troubleshooting guide](docs/windows-memory.md). It shows how

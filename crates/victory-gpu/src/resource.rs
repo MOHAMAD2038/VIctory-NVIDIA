@@ -2044,19 +2044,25 @@ pub(crate) fn room_percent() -> u64 {
 /// of `budget`: `VICTORY_TEXTURE_ROOM_PERCENT`'s share of it if set, else
 /// [`line_for`] it, lowered to keep `VICTORY_TEXTURE_HEADROOM_MB` free if
 /// that is set ([`line_with_headroom`]; the share switch wins over it).
+/// Without the switch, a card of 9 GiB or less keeps
+/// [`crate::low_vram::card_headroom`] free.
 #[cfg(windows)]
 pub(crate) fn room_line(budget: u64) -> u64 {
     static SET: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     if *SET.get_or_init(|| std::env::var_os("VICTORY_TEXTURE_ROOM_PERCENT").is_some()) {
         budget / 100 * room_percent()
     } else {
-        static HEADROOM: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-        let headroom = *HEADROOM.get_or_init(|| {
-            std::env::var("VICTORY_TEXTURE_HEADROOM_MB")
-                .ok()
-                .and_then(|v| v.trim().parse::<u64>().ok())
-                .map_or(0, |mb| mb.saturating_mul(1 << 20))
+        static HEADROOM: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+        let asked = *HEADROOM.get_or_init(|| {
+            std::env::var("VICTORY_TEXTURE_HEADROOM_MB").ok().and_then(|v| v.trim().parse::<u64>().ok())
         });
+        // A value the switch cannot be read as was always 0 (no headroom of
+        // its own): `-MB` set means the switch was meant, so it is not then
+        // overruled by the card. Unset: the card's budget decides.
+        let headroom = match asked {
+            Some(mb) => mb.saturating_mul(1 << 20),
+            None => crate::low_vram::card_headroom(budget),
+        };
         line_with_headroom(budget, line_for(budget), headroom)
     }
 }

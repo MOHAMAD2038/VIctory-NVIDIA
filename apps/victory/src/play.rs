@@ -422,7 +422,7 @@ fn settings(o: &Play, menu: &[(String, String)], streamline: Option<&Path>) -> (
     {
         dlss_on = true;
         set("VICTORY_DLSS", "1");
-        set("VICTORY_DLSS_MODE", &dlss);
+        set("VICTORY_DLSS_MODE", dlss);
         set("VICTORY_STREAMLINE_DIR", &dir.to_string_lossy());
         if framegen {
             framegen_x = Some(times);

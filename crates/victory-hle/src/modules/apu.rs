@@ -543,7 +543,7 @@ mod tests {
     #[test]
     fn decodes_into_unaligned_output_interleaved_and_deinterleaved() {
         let tone: Vec<f32> = (0..960 * 2)
-            .map(|i: i32| {
+            .map(|i: usize| {
                 let phase = (i / 2) as f32 * std::f32::consts::TAU / 48_000.0;
                 if i.is_multiple_of(2) {
                     (phase * 440.0).sin() * 0.5

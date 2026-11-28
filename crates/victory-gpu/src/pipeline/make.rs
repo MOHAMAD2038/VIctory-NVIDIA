@@ -561,7 +561,10 @@ fn worker_count_for(asked: Option<usize>, processors: usize, ram: crate::low_vra
         (Some(n), _) => n.clamp(1, 64),
         (None, Ram::Tight) => (processors / 2).clamp(2, 6),
         (None, Ram::Limited) => (processors * 3 / 4).clamp(2, 8),
-        (None, Ram::Roomy) => (processors * 2 / 3).clamp(2, 16),
+        // (Three quarters for both of the larger tiers, so that a PC of 32 GiB
+        // or less never gets more workers than a roomier one: at two thirds a
+        // roomy eight-thread PC got five against the limited tier's six.)
+        (None, Ram::Roomy) => (processors * 3 / 4).clamp(2, 16),
     }
 }
 

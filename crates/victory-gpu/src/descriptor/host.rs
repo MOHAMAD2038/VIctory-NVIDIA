@@ -1707,11 +1707,20 @@ fn view_elements(view: &View) -> Option<(u32, bool, u32)> {
 /// a copy of its own bytes ([`crate::shadow::exact`]). (A typed view of
 /// 12-byte elements at a multiple of 16 that is none of 12 is one of them: it
 /// was passed over, and stayed null.)
+///
+/// A view whose offset lies on one of its elements is left to its buffer's
+/// copy — unless it is made raw, which every structured view is where it can
+/// be (see [`raw_window`]): a raw view begins on 16 bytes, and the buffer's
+/// copy holds it at any offset, so on an element that is none of 16 the copy
+/// is no place for it. The culling's 456-byte constants at 4104 (a ring
+/// position) are one: they shared the buffer's copy, the host made no raw
+/// view of them, and the slot stayed null.
 fn off_elements(offset: u64, stride: u32, raw: bool, element: u64) -> bool {
     if raw {
         !offset.is_multiple_of(16)
     } else if stride > 0 {
-        !offset.is_multiple_of(16) && !offset.is_multiple_of(u64::from(stride))
+        // (Structured: made raw, so on 16 bytes.)
+        !offset.is_multiple_of(16)
     } else {
         element > 0 && !offset.is_multiple_of(element)
     }
@@ -6149,17 +6158,21 @@ mod tests {
     }
 
     /// Views that begin where no host view can: raw ones off 16 bytes,
-    /// structured ones off their elements (and off 16 bytes, where they are
-    /// made raw), typed ones off theirs.
+    /// structured ones off 16 bytes (they are made raw, on an element or not),
+    /// typed ones off their elements.
     #[test]
     fn views_off_their_elements_are_told() {
         // the colour table bakes' parameter block: raw, 8 bytes into its window
         assert!(off_elements(8, 0, true, 4));
         assert!(!off_elements(0, 0, true, 4));
         assert!(!off_elements(48, 0, true, 4));
-        // 456-byte elements: at one of them, on 16 bytes, at neither
-        assert!(!off_elements(456, 456, false, 0));
-        assert!(!off_elements(32, 456, false, 0));
+        // 456-byte elements: on 16 bytes whatever their elements say (they are
+        // made raw, which begins on 16), and at neither 4104 = 9 * 456, the
+        // ring position the constant block lands on, is a multiple of 16 but
+        // not of 456: both count as off.
+        assert!(!off_elements(32, 456, false, 0), "on 16 bytes");
+        assert!(off_elements(456, 456, false, 0), "on an element, off 16 bytes");
+        assert!(off_elements(4_104, 456, false, 0), "on an element and off 16 bytes");
         assert!(off_elements(100, 456, false, 0));
         // A typed view of 12-byte elements on 16 bytes and not on an element.
         assert!(off_elements(23_702_896, 0, false, 12));
@@ -6176,7 +6189,12 @@ mod tests {
             return; // no host GPU here
         };
         let memory = vec![0u64; 1 << 13];
-        let start = (memory.as_ptr() as u64).next_multiple_of(4096);
+        // One line past a 64 KiB line as well, so the views' addresses do not
+        // depend on what the allocator hands out: the structured view's start
+        // (this + 8) is then a multiple of its 456-byte elements (4104, a ring
+        // position) and none of 16, which is the case that used to be left to
+        // the buffer's copy and stayed null.
+        let start = (memory.as_ptr() as u64).next_multiple_of(4096) + 4096;
         // SAFETY: a plain CPU-side heap of one view.
         let cpu: ID3D12DescriptorHeap = unsafe {
             host.device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC {

@@ -32,6 +32,9 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings 2>&1 | Tee-Object clippy.txt | Out-Host
       - name: Clippy, diagnostics build
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings 2>&1 | Tee-Object clippy-all-features.txt | Out-Host
+      # Includes xtask's repository_passes_policy, the asset-policy check.
+      - name: Tests
+        run: cargo test --workspace --locked 2>&1 | Tee-Object clippy-tests.txt | Out-Host
       # A failing run's log cannot always be read, so the output of whichever
       # clippy step failed also goes into a comment on the pull request.
       - name: The failing step's output, in a comment
@@ -47,6 +50,3 @@ jobs:
           gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" -X POST -F body=@clippy-comment.md
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # Includes xtask's repository_passes_policy, the asset-policy check.
-      - name: Tests
-        run: cargo test --workspace --locked 2>&1 | Tee-Object clippy-tests.txt | Out-Host

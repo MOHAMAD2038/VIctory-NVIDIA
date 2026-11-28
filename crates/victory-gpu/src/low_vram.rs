@@ -282,7 +282,7 @@ mod tests {
         }
         assert_eq!(card_headroom(0), GIB);
         // Never more than the card itself.
-        assert!(card_headroom(1 * GIB) <= 1 * GIB);
+        assert!(card_headroom(GIB) <= GIB);
     }
 
     #[test]

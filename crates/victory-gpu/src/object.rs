@@ -479,7 +479,7 @@ mod tests {
                 let mut retiring: Vec<_> = (0..256).map(|_| new_test_object()).collect();
                 let retiring_count = retiring.len();
                 let start = Instant::now();
-                for index in 0..RELEASES as usize {
+                for index in 0..RELEASES {
                     let object = new_test_object();
                     if index.is_multiple_of(4) {
                         assert_eq!(set(object, &TAG, 1, b"b".as_ptr()), S_OK);

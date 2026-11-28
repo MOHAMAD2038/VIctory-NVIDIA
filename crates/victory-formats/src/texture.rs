@@ -1942,9 +1942,11 @@ mod tests {
                 longest = longest.max(t.runs.iter().map(|r| r.len).max().unwrap_or(0));
                 entries += t.entries();
             }
-            // Runs and rows of the top mip are its width and height in
-            // blocks at most (the array's two slices, both of them rows).
-            assert!(runs0 <= (w / 4) as usize && rows0 == 2 * (w / 4) as usize);
+            // Runs and rows of the top mip: a run starts at a block column
+            // at most (so `runs0` is its width in blocks or fewer), and a
+            // row is one row of blocks of the slice asked for (`rows0` is
+            // its height: a subresource is one slice, not the array).
+            assert!(runs0 <= (w / 4) as usize && rows0 == (w / 4) as usize);
             println!(
                 "BC7 {w}x{w} {swizzle:?}: {mips} mips, {entries} entries in all (mip 0: {runs0} runs + {rows0} rows), longest run {longest} bytes, {} MiB of texels",
                 l.size >> 20

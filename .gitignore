@@ -77,6 +77,11 @@
 Thumbs.db
 .DS_Store
 
+# Output of a build or a test run kept for reading (`cargo test 2>&1 |
+# Tee-Object test.log`): not part of the repository, and `cargo xtask policy`
+# reads untracked files as its own.
+*.log
+
 # NVIDIA's own files (Get-NVIDIA-DLSS.cmd fetches them from NVIDIA; never part of this repository)
 /nvidia-sdk/
 # AMD's own files (Get-AMD-FSR.cmd fetches them from AMD; never part of this repository)

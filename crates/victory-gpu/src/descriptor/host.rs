@@ -1707,11 +1707,20 @@ fn view_elements(view: &View) -> Option<(u32, bool, u32)> {
 /// a copy of its own bytes ([`crate::shadow::exact`]). (A typed view of
 /// 12-byte elements at a multiple of 16 that is none of 12 is one of them: it
 /// was passed over, and stayed null.)
+///
+/// A view whose offset lies on one of its elements is left to its buffer's
+/// copy — unless it is made raw, which every structured view is where it can
+/// be (see [`raw_window`]): a raw view begins on 16 bytes, and the buffer's
+/// copy holds it at any offset, so on an element that is none of 16 the copy
+/// is no place for it. The culling's 456-byte constants at 4104 (a ring
+/// position) are one: they shared the buffer's copy, the host made no raw
+/// view of them, and the slot stayed null.
 fn off_elements(offset: u64, stride: u32, raw: bool, element: u64) -> bool {
     if raw {
         !offset.is_multiple_of(16)
     } else if stride > 0 {
-        !offset.is_multiple_of(16) && !offset.is_multiple_of(u64::from(stride))
+        // (Structured: made raw, so on 16 bytes.)
+        !offset.is_multiple_of(16)
     } else {
         element > 0 && !offset.is_multiple_of(element)
     }
@@ -6176,7 +6185,12 @@ mod tests {
             return; // no host GPU here
         };
         let memory = vec![0u64; 1 << 13];
-        let start = (memory.as_ptr() as u64).next_multiple_of(4096);
+        // One line past a 64 KiB line as well, so the views' addresses do not
+        // depend on what the allocator hands out: the structured view's start
+        // (this + 8) is then a multiple of its 456-byte elements (4104, a ring
+        // position) and none of 16, which is the case that used to be left to
+        // the buffer's copy and stayed null.
+        let start = (memory.as_ptr() as u64).next_multiple_of(4096) + 4096;
         // SAFETY: a plain CPU-side heap of one view.
         let cpu: ID3D12DescriptorHeap = unsafe {
             host.device.CreateDescriptorHeap(&D3D12_DESCRIPTOR_HEAP_DESC {

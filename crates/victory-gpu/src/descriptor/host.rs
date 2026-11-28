@@ -5459,7 +5459,7 @@ mod changed_records_tests {
             let mut now = last.clone();
             let mut differ = Vec::new();
             for slot in 0..count {
-                if random().is_multiple_of(9) {
+                if random() % 9 == 0 {
                     now[slot * step + random() % step] ^= 1 + (random() % 255) as u8;
                     differ.push(1000 + slot as u32);
                 }
@@ -6606,7 +6606,7 @@ mod tests {
             set.put(slot);
         }
         assert_eq!(set.all(|_| true), [0, 63, 64, 130, 199]);
-        assert_eq!(set.all(|slot| slot.is_multiple_of(2)), [0, 64, 130]);
+        assert_eq!(set.all(|slot| slot % 2 == 0), [0, 64, 130]);
         assert!(set.remove(64) && !set.remove(64) && !set.remove(5));
         assert_eq!(set.take(), [0, 63, 130, 199]);
         assert!(set.take().is_empty());

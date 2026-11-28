@@ -377,7 +377,7 @@ fn scene() -> (Scene, Vec<Vec<Case>>) {
         } else {
             bvh::boxes16(&words)
         };
-        for k in 0..12 {
+        for k in 0..12usize {
             let origin = g.vector(12.0);
             let direction = if k.is_multiple_of(2) {
                 let b = boxes[(k / 2) % 4];

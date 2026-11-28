@@ -98,7 +98,7 @@ pub(crate) fn slots(words: &[u32], count: u32, table: u32) -> Vec<(usize, u32)> 
         if word > 0 && word < count && word % 32 != 0 {
             out.push((i, word));
         }
-        if word.is_multiple_of(32) && word / 32 > 16 && word / 32 < count {
+        if word % 32 == 0 && word / 32 > 16 && word / 32 < count {
             out.extend((0..table).map(|k| (i, word / 32 + k)).filter(|s| s.1 < count));
         }
     }

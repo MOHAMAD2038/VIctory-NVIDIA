@@ -6158,17 +6158,21 @@ mod tests {
     }
 
     /// Views that begin where no host view can: raw ones off 16 bytes,
-    /// structured ones off their elements (and off 16 bytes, where they are
-    /// made raw), typed ones off theirs.
+    /// structured ones off 16 bytes (they are made raw, on an element or not),
+    /// typed ones off their elements.
     #[test]
     fn views_off_their_elements_are_told() {
         // the colour table bakes' parameter block: raw, 8 bytes into its window
         assert!(off_elements(8, 0, true, 4));
         assert!(!off_elements(0, 0, true, 4));
         assert!(!off_elements(48, 0, true, 4));
-        // 456-byte elements: at one of them, on 16 bytes, at neither
-        assert!(!off_elements(456, 456, false, 0));
-        assert!(!off_elements(32, 456, false, 0));
+        // 456-byte elements: on 16 bytes whatever their elements say (they are
+        // made raw, which begins on 16), and at neither 4104 = 9 * 456, the
+        // ring position the constant block lands on, is a multiple of 16 but
+        // not of 456: both count as off.
+        assert!(!off_elements(32, 456, false, 0), "on 16 bytes");
+        assert!(off_elements(456, 456, false, 0), "on an element, off 16 bytes");
+        assert!(off_elements(4_104, 456, false, 0), "on an element and off 16 bytes");
         assert!(off_elements(100, 456, false, 0));
         // A typed view of 12-byte elements on 16 bytes and not on an element.
         assert!(off_elements(23_702_896, 0, false, 12));

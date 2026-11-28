@@ -9,6 +9,8 @@ on:
 
 permissions:
   contents: read
+  # Only for the clippy step's failure report (below).
+  pull-requests: write
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -26,8 +28,21 @@ jobs:
       # The version and components pinned in rust-toolchain.toml.
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+      # The failure output goes into a comment on the pull request as well as
+      # into the log, so it can be read where the log is out of reach.
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: |
+          cargo clippy --workspace --all-targets --locked -- -D warnings 2>&1 | Tee-Object clippy.txt | Out-Host
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            $tail = (Get-Content clippy.txt -Tail 150) -join "`n"
+            "The Clippy step failed on ${{ github.sha }}.`n`n~~~`n$tail`n~~~" |
+              Set-Content -Path clippy-comment.md
+            gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" -X POST -F body=@clippy-comment.md
+            exit $code
+          }
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Clippy, diagnostics build
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       # Includes xtask's repository_passes_policy, the asset-policy check.

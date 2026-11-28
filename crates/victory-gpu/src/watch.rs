@@ -4456,7 +4456,7 @@ mod tests {
             seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
             (seed >> 33) as usize % n
         };
-        for round in 0..40_000 {
+        for round in 0..40_000usize {
             // About the ends of pieces and words.
             let block = [0, 63, Blocks::IN_PIECE, 3 * Blocks::IN_PIECE - 70][next(4)] + next(140);
             if next(3) == 0 {

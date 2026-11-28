@@ -16,6 +16,7 @@
 //! `present` (swap chain).
 
 #[cfg(windows)]
+mod ahead;
 mod ambient;
 #[cfg(all(windows, feature = "diagnostics"))]
 mod capture;
@@ -76,6 +77,7 @@ mod residency;
 /// end's own question; the rest is for the layer.
 pub mod low_vram;
 pub mod resource;
+pub mod save_share;
 pub mod root;
 #[cfg(windows)]
 mod safecopy;
